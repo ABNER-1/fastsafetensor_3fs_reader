@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-pure:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package (pure Python mode)
+        run: |
+          python -m pip install --upgrade pip
+          FST3FS_NO_EXT=1 pip install ".[test]" --no-build-isolation
+
+      - name: Verify import
+        run: |
+          python -c "
+          from fastsafetensor_3fs_reader import MockFileReader, FileReaderInterface, is_available
+          print(f'is_available: {is_available()}')
+          print(f'MockFileReader: {MockFileReader}')
+          print(f'FileReaderInterface: {FileReaderInterface}')
+          assert not is_available(), 'C++ extension should not be available in pure mode'
+          print('All imports OK')
+          "
+
+      - name: Run CI mock tests
+        run: |
+          pytest tests/test_mock.py -v

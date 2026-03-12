@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+*.egg
+MANIFEST
+
+# Compiled extensions
+*.so
+*.dylib
+*.pyd
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# pytest cache
+.pytest_cache/
+.cache/
+
+# mypy / type checkers
+.mypy_cache/
+.dmypy.json
+
+# Coverage
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Aone Copilot AI plans (internal tooling)
+.aone_copilot/

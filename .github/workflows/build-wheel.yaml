@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: Build & Publish Wheels
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1: Build pure Python wheel (no C++ extension)
+  # ---------------------------------------------------------------
+  build-pure-wheel:
+    name: Build Pure Python Wheel
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip setuptools wheel pybind11
+
+      - name: Build pure Python wheel
+        run: |
+          FST3FS_NO_EXT=1 python setup.py bdist_wheel --python-tag=py3
+
+      - name: Build sdist
+        run: |
+          python setup.py sdist
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pure-wheel
+          path: dist/*
+
+  # ---------------------------------------------------------------
+  # Job 2: Build platform wheel with C++ extension (requires CUDA)
+  # ---------------------------------------------------------------
+  build-platform-wheel:
+    name: Build Platform Wheel (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.4.1-devel-ubuntu22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:deadsnakes/ppa
+          apt-get update
+          apt-get install -y python${{ matrix.python-version }} python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
+          python${{ matrix.python-version }} -m ensurepip --upgrade || true
+          python${{ matrix.python-version }} -m pip install --upgrade pip setuptools wheel pybind11
+
+      - name: Build platform wheel
+        run: |
+          python${{ matrix.python-version }} setup.py bdist_wheel
+        env:
+          CUDA_HOME: /usr/local/cuda
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-wheel-cp${{ matrix.python-version }}
+          path: dist/*.whl
+
+  # ---------------------------------------------------------------
+  # Job 3: Test pure Python wheel installation
+  # ---------------------------------------------------------------
+  test-pure-wheel:
+    name: Test Pure Wheel (Python ${{ matrix.python-version }})
+    needs: build-pure-wheel
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: pure-wheel
+          path: dist/
+
+      - name: Install wheel
+        run: |
+          pip install dist/fastsafetensor_3fs_reader-*-py3-none-any.whl
+          pip install pytest
+
+      - name: Verify import
+        run: |
+          python -c "
+          from fastsafetensor_3fs_reader import MockFileReader, FileReaderInterface, is_available
+          assert not is_available()
+          reader = MockFileReader()
+          print('Pure wheel installation OK')
+          "
+
+      - name: Run tests
+        run: |
+          pytest tests/test_mock_reader.py tests/test_interface.py -v
+
+  # ---------------------------------------------------------------
+  # Job 4: Publish to PyPI (only on tag push)
+  # ---------------------------------------------------------------
+  publish:
+    name: Publish to PyPI
+    needs: [build-pure-wheel, test-pure-wheel]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download pure wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: pure-wheel
+          path: dist/
+
+      - name: Download platform wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: platform-wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: List all artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
