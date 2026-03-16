@@ -91,6 +91,8 @@ jobs:
         run: |
           cd 3fs
           python${{ matrix.python-version }} setup.py bdist_wheel
+        env:
+          CMAKE_ARGS: "-DSHUFFLE_METHOD=g++11"
 
       - name: List build artifacts
         run: ls -la 3fs/dist/
