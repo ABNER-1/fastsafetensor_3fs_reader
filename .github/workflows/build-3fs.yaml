@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: Build 3FS USRBIO Wheel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-3fs-wheel:
+    name: Build hf3fs_py_usrbio (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Clone 3FS source code
+        run: |
+          git clone https://github.com/deepseek-ai/3FS.git 3fs
+          cd 3fs
+          git submodule update --init --recursive
+          ./patches/apply.sh
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake libuv1-dev liblz4-dev liblzma-dev \
+            libdouble-conversion-dev libdwarf-dev libunwind-dev \
+            libaio-dev libgflags-dev libgoogle-glog-dev libgtest-dev libgmock-dev \
+            clang-format-14 clang-14 clang-tidy-14 lld-14 \
+            libgoogle-perftools-dev google-perftools libssl-dev \
+            gcc-12 g++-12 libboost-all-dev build-essential \
+            meson ninja-build \
+            software-properties-common
+
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.1.61/foundationdb-clients_7.1.61-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.1.61-1_amd64.deb
+          rm foundationdb-clients_7.1.61-1_amd64.deb
+
+      - name: Build and install libfuse
+        run: |
+          git clone https://github.com/libfuse/libfuse.git libfuse -b fuse-3.16.2 --depth 1
+          mkdir libfuse/build
+          cd libfuse/build
+          meson setup ..
+          ninja
+          sudo ninja install
+          cd ../..
+          rm -rf libfuse
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build 3FS with Cargo and CMake
+        run: |
+          cd 3fs
+          cargo build --release
+          cmake -S . -B build \
+            -DCMAKE_CXX_COMPILER=clang++-14 \
+            -DCMAKE_C_COMPILER=clang-14 \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DUSE_RTTI=ON \
+            -DOVERRIDE_CXX_NEW_DELETE=OFF \
+            -DSAVE_ALLOCATE_SIZE=OFF \
+            -DFOLLY_DISABLE_LIBUNWIND=ON \
+            -DSHUFFLE_METHOD=g++11
+          cmake --build build -j $(nproc)
+
+      - name: Install Python ${{ matrix.python-version }}
+        run: |
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y \
+            python${{ matrix.python-version }} \
+            python${{ matrix.python-version }}-dev \
+            python${{ matrix.python-version }}-venv
+          python${{ matrix.python-version }} -m ensurepip --upgrade || true
+          python${{ matrix.python-version }} -m pip install --upgrade pip setuptools wheel
+
+      - name: Build hf3fs_py_usrbio wheel
+        run: |
+          cd 3fs
+          python${{ matrix.python-version }} setup.py bdist_wheel
+
+      - name: List build artifacts
+        run: ls -la 3fs/dist/
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf3fs_py_usrbio-cp${{ matrix.python-version }}-linux-x86_64
+          path: 3fs/dist/*.whl
+          if-no-files-found: error

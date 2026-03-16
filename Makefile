@@ -12,15 +12,15 @@ install-pure:
 
 # Build pure Python wheel (no C++ extension, works anywhere)
 dist-pure:
-	FST3FS_NO_EXT=1 python setup.py bdist_wheel --python-tag=py3
+	FST3FS_NO_EXT=1 python3 setup.py bdist_wheel --python-tag=py3
 
 # Build platform wheel (with C++ extension, requires CUDA)
 dist-platform:
-	python setup.py bdist_wheel
+	python3 setup.py bdist_wheel
 
 # Build source distribution
 sdist:
-	python setup.py sdist
+	python3 setup.py sdist
 
 # Build both pure wheel and sdist (default dist target)
 dist: dist-pure sdist
@@ -28,10 +28,6 @@ dist: dist-pure sdist
 # Run tests
 test:
 	pytest tests/ -v
-
-# Run mock tests only (no C++ / CUDA required)
-test-mock:
-	pytest tests/test_mock_reader.py tests/test_interface.py -v
 
 # Clean build artifacts
 clean:
