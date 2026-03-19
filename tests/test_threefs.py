@@ -264,23 +264,24 @@ class TestDataIntegrity:
         _, header_length, _ = real_results[filepath]
         parsed = json.loads(real_results[filepath][0])
 
-        iov_base = threefs_reader.iov_base
         for tensor_name, expected_raw in [("tensor_a", t1_data), ("tensor_b", t2_data)]:
             start, end = parsed[tensor_name]["data_offsets"]
             data_len = end - start
-            assert threefs_reader.iov_length >= data_len
+
+            # Allocate an independent host buffer as the copy target.
+            # Passing dev_ptr=iov_base would cause a self-copy (src==dst) on
+            # the USRBIO path, which is a no-op and cannot verify data transfer.
+            host_buf = (ctypes.c_char * data_len)()
+            host_ptr = ctypes.addressof(host_buf)
 
             bytes_read = threefs_reader.read_chunked(
                 path=filepath,
-                dev_ptr=iov_base,
+                dev_ptr=host_ptr,
                 file_offset=header_length + start,
                 total_length=data_len,
             )
             assert bytes_read == data_len
-
-            buf = bytearray(data_len)
-            _copy_target_to_host(iov_base, buf, data_len)
-            assert bytes(buf) == expected_raw
+            assert bytes(host_buf) == expected_raw
 
 
 # ---------------------------------------------------------------------------
@@ -399,27 +400,27 @@ class TestPythonBackend:
         assert bytes_read == file_size
 
     def test_python_backend_data_integrity(self, threefs_reader_py, tmp_safetensors_large):
-        """Test data integrity with Python backend using _copy_target_to_host."""
+        """Test data integrity with Python backend using an independent host buffer."""
         filepath, expected_data = tmp_safetensors_large
         data_len = len(expected_data)
 
         real_results = threefs_reader_py.read_headers_batch([filepath])
         _, header_length, _ = real_results[filepath]
 
-        iov_base = threefs_reader_py.iov_base
-        assert threefs_reader_py.iov_length >= data_len
+        # Allocate an independent host buffer as the copy target.
+        # Passing dev_ptr=iov_base would cause a self-copy (src==dst) on the
+        # USRBIO path, which is a no-op and cannot verify data transfer.
+        host_buf = (ctypes.c_char * data_len)()
+        host_ptr = ctypes.addressof(host_buf)
 
         bytes_read = threefs_reader_py.read_chunked(
             path=filepath,
-            dev_ptr=iov_base,
+            dev_ptr=host_ptr,
             file_offset=header_length,
             total_length=data_len,
         )
         assert bytes_read == data_len
-
-        buf = bytearray(data_len)
-        _copy_target_to_host(iov_base, buf, data_len)
-        assert bytes(buf) == expected_data
+        assert bytes(host_buf) == expected_data
 
     def test_python_backend_matches_mock(self, threefs_reader_py, tmp_safetensors):
         """Verify Python backend produces same results as MockFileReader."""
