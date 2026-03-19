@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple
+
 
 class FileReaderInterface(ABC):
     """Minimal abstract interface for 3FS file readers.
@@ -30,9 +30,9 @@ class FileReaderInterface(ABC):
     @abstractmethod
     def read_headers_batch(
         self,
-        paths: List[str],
+        paths: list[str],
         num_threads: int = 8,
-    ) -> Dict[str, Tuple[str, int, int]]:
+    ) -> dict[str, tuple[str, int, int]]:
         """Read SafeTensors headers from multiple files in parallel.
 
         Opens each file, caches the fd for later read_chunked reuse.

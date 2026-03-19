@@ -1,6 +1,6 @@
 [project]
 name = "fastsafetensor-3fs-reader"
-version = "0.1.0"
+version = "0.2.0"
 description = "3FS USRBIO file reader for fastsafetensors"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -21,7 +21,18 @@ classifiers = [
 [project.optional-dependencies]
 test = [
     "pytest>=8.1.1",
+    "numpy",
 ]
+# GPU memory transfer via PyTorch
+gpu = [
+    "torch>=2.0",
+]
+# Code quality tools
+lint = [
+    "ruff>=0.6.0",
+]
+# NOTE: hf3fs-py-usrbio must be built from the DeepSeek 3FS source tree.
+# It is NOT available on PyPI.  See README.md for installation instructions.
 
 [project.urls]
 Repository = "https://github.com/your-org/fastsafetensor_3fs_reader"
@@ -29,3 +40,36 @@ Repository = "https://github.com/your-org/fastsafetensor_3fs_reader"
 [build-system]
 requires = ["setuptools>=69.5.1", "wheel", "pybind11"]
 build-backend = "setuptools.build_meta"
+
+# ---------------------------------------------------------------------------
+# Ruff configuration
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["fastsafetensor_3fs_reader", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in default arguments
+    "B904",  # raise from within except (too strict for this codebase)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fastsafetensor_3fs_reader"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false

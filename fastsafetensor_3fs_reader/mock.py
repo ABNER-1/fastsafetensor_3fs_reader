@@ -3,15 +3,20 @@
 import ctypes
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Tuple
 
+from ._cuda_utils import _copy_host_to_target
 from .interface import FileReaderInterface
+
 
 class MockFileReader(FileReaderInterface):
     """Local filesystem-backed mock for CI tests. No 3FS/CUDA/C++ required."""
 
-    def __init__(self, mount_point: str = ""):
-        self._fd_map: Dict[str, int] = {}
+    def __init__(self, mount_point: str = "", **kwargs) -> None:
+        # Accept and ignore extra keyword arguments (entries, io_depth,
+        # buffer_size, etc.) so that MockFileReader can be used as a
+        # drop-in replacement for ThreeFSFileReaderCpp / Py without
+        # the caller having to strip backend-specific parameters.
+        self._fd_map: dict[str, int] = {}
         self._mount_point = mount_point
 
     def read_chunked(
@@ -29,19 +34,25 @@ class MockFileReader(FileReaderInterface):
         data = os.pread(fd, total_length, file_offset)
 
         if dev_ptr != 0:
-            ctypes.memmove(dev_ptr, data, len(data))
+            # Use _copy_host_to_target instead of ctypes.memmove so that GPU
+            # pointers (cudaMemcpyDefault) are handled safely without SIGSEGV.
+            staging_buf = bytearray(data)
+            staging_ptr = ctypes.addressof(
+                (ctypes.c_char * len(staging_buf)).from_buffer(staging_buf)
+            )
+            _copy_host_to_target(staging_buf, staging_ptr, dev_ptr, len(data))
 
         return len(data)
 
     def read_headers_batch(
         self,
-        paths: List[str],
+        paths: list[str],
         num_threads: int = 8,
-    ) -> Dict[str, Tuple[str, int, int]]:
+    ) -> dict[str, tuple[str, int, int]]:
         if not paths:
             return {}
 
-        results: Dict[str, Tuple[str, int, int]] = {}
+        results: dict[str, tuple[str, int, int]] = {}
         with ThreadPoolExecutor(max_workers=num_threads) as pool:
             futures = {pool.submit(self._read_single_header, p): p for p in paths}
             for future in as_completed(futures):
@@ -49,7 +60,7 @@ class MockFileReader(FileReaderInterface):
                 results[path] = future.result()
         return results
 
-    def _read_single_header(self, path: str) -> Tuple[str, int, int]:
+    def _read_single_header(self, path: str) -> tuple[str, int, int]:
         fd = os.open(path, os.O_RDONLY)
         self._fd_map[path] = fd
         file_size = os.fstat(fd).st_size

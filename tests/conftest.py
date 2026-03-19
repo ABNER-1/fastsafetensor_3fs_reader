@@ -4,15 +4,14 @@ import json
 import os
 import struct
 
-import numpy as np
 import pytest
 
 from fastsafetensor_3fs_reader import MockFileReader, is_available
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _create_safetensors_file(
     filepath: str,
@@ -53,6 +52,7 @@ def _create_safetensors_file(
 # Basic fixtures (used by CI mock tests)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def tmp_safetensors(tmp_path):
     """Single minimal safetensors file (2×3 F32 zeros)."""
@@ -81,6 +81,7 @@ def tmp_safetensors_large(tmp_path):
     """
     values = list(range(256))
     import struct as _struct
+
     data = _struct.pack(f"<{len(values)}f", *values)
     filepath = str(tmp_path / "large.safetensors")
     _create_safetensors_file(filepath, tensor_name="data", data=data)
@@ -94,6 +95,7 @@ def tmp_model_shards(tmp_path):
     Returns list of (path, raw_tensor_bytes) tuples.
     """
     import struct as _struct
+
     shards = []
     for i in range(5):
         values = [float(i * 100 + j) for j in range(64)]
@@ -116,6 +118,7 @@ def mock_reader():
 # 3FS fixtures (used by real-3FS tests, skip when environment absent)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def threefs_mount_point():
     """Return the 3FS mount point from env var, or skip the test."""
@@ -135,6 +138,24 @@ def threefs_reader(threefs_mount_point):
     if not is_available():
         pytest.skip("3FS C++ module not available")
     from fastsafetensor_3fs_reader import ThreeFSFileReader
+
     reader = ThreeFSFileReader(mount_point=threefs_mount_point)
+    yield reader
+    reader.close()
+
+
+@pytest.fixture
+def threefs_reader_py(threefs_mount_point):
+    """ThreeFSFileReaderPy instance (Python backend) for testing.
+
+    Forces the Python backend regardless of C++ availability.
+    Skips if hf3fs_fuse.io is not available.
+    """
+    from fastsafetensor_3fs_reader.reader_py import ThreeFSFileReaderPy, check_library
+
+    if not check_library():
+        pytest.skip("hf3fs_fuse.io not available — skipping Python backend tests")
+
+    reader = ThreeFSFileReaderPy(mount_point=threefs_mount_point)
     yield reader
     reader.close()

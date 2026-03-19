@@ -25,9 +25,30 @@ sdist:
 # Build both pure wheel and sdist (default dist target)
 dist: dist-pure sdist
 
+# Run linting
+lint:
+	ruff check fastsafetensor_3fs_reader tests
+
+lint-fix:
+	ruff check --fix fastsafetensor_3fs_reader tests
+	ruff format fastsafetensor_3fs_reader tests
+
+format:
+	ruff format fastsafetensor_3fs_reader tests
+
 # Run tests
 test:
 	pytest tests/ -v
+
+test-3fs:
+	THREEFS_MOUNT_POINT=/mnt/3fs pytest tests/ -v
+
+# Run tests with Python backend only (requires hf3fs_fuse.io)
+test-python:
+	THREEFS_MOUNT_POINT=/mnt/3fs pytest tests/test_threefs.py::TestPythonBackend -v
+
+# Run tests with all backends
+test-all: test test-3fs test-python
 
 # Clean build artifacts
 clean:

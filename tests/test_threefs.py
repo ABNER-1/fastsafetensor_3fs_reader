@@ -14,6 +14,7 @@ import struct
 import pytest
 
 from fastsafetensor_3fs_reader import FileReaderInterface, MockFileReader, is_available
+from fastsafetensor_3fs_reader._cuda_utils import _copy_target_to_host
 
 pytestmark = pytest.mark.skipif(
     not is_available() or not os.environ.get("THREEFS_MOUNT_POINT"),
@@ -25,8 +26,8 @@ pytestmark = pytest.mark.skipif(
 # TestThreeFSReaderInterface
 # ---------------------------------------------------------------------------
 
-class TestThreeFSReaderInterface:
 
+class TestThreeFSReaderInterface:
     def test_is_interface_instance(self, threefs_reader):
         assert isinstance(threefs_reader, FileReaderInterface)
 
@@ -48,8 +49,8 @@ class TestThreeFSReaderInterface:
 # TestReadHeadersBatch
 # ---------------------------------------------------------------------------
 
-class TestReadHeadersBatch:
 
+class TestReadHeadersBatch:
     def test_single_file_returns_correct_format(self, threefs_reader, tmp_safetensors):
         results = threefs_reader.read_headers_batch([tmp_safetensors])
 
@@ -93,7 +94,7 @@ class TestReadHeadersBatch:
         assert real_size == mock_size
 
     def test_nonexistent_file_raises(self, threefs_reader):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             threefs_reader.read_headers_batch(["/nonexistent/path/model.safetensors"])
 
 
@@ -101,8 +102,8 @@ class TestReadHeadersBatch:
 # TestReadChunked
 # ---------------------------------------------------------------------------
 
-class TestReadChunked:
 
+class TestReadChunked:
     def test_read_full_file(self, threefs_reader, tmp_safetensors):
         file_size = os.path.getsize(tmp_safetensors)
         bytes_read = threefs_reader.read_chunked(
@@ -130,13 +131,11 @@ class TestReadChunked:
         threefs_reader.read_headers_batch([tmp_safetensors])
         assert threefs_reader.has_fd(tmp_safetensors)
 
-        threefs_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        threefs_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         assert threefs_reader.has_fd(tmp_safetensors)
 
     def test_nonexistent_file_raises(self, threefs_reader):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             threefs_reader.read_chunked(
                 path="/nonexistent/file.safetensors",
                 dev_ptr=0,
@@ -168,6 +167,7 @@ class TestReadChunked:
 # TestDataIntegrity
 # ---------------------------------------------------------------------------
 
+
 class TestDataIntegrity:
     """Byte-level comparison between ThreeFSFileReader and MockFileReader.
 
@@ -195,20 +195,22 @@ class TestDataIntegrity:
         real_results = threefs_reader.read_headers_batch([filepath])
         _, header_length, _ = real_results[filepath]
 
-        iov_base = threefs_reader.iov_base
-        assert threefs_reader.iov_length >= data_len
+        # Allocate an independent host buffer as the copy target.
+        # Passing dev_ptr=iov_base would cause a self-copy (src==dst) on the
+        # USRBIO path because _usrbio_copy_to_target reads from _iov_buf_ptr
+        # and writes to target_ptr — when they are equal the copy is a no-op
+        # and cannot be used to verify that data was actually transferred.
+        host_buf = (ctypes.c_char * data_len)()
+        host_ptr = ctypes.addressof(host_buf)
 
         bytes_read = threefs_reader.read_chunked(
             path=filepath,
-            dev_ptr=iov_base,
+            dev_ptr=host_ptr,
             file_offset=header_length,
             total_length=data_len,
         )
         assert bytes_read == data_len
-
-        buf = ctypes.create_string_buffer(data_len)
-        ctypes.memmove(buf, iov_base, data_len)
-        assert buf.raw == expected_data
+        assert bytes(host_buf) == expected_data
 
     def test_model_shards_match_mock(self, threefs_reader, tmp_model_shards):
         paths = [p for p, _ in tmp_model_shards]
@@ -223,20 +225,21 @@ class TestDataIntegrity:
             assert real_header_len == mock_header_len
 
             data_len = len(expected_data)
-            iov_base = threefs_reader.iov_base
-            assert threefs_reader.iov_length >= data_len
+
+            # Allocate an independent host buffer as the copy target.
+            # Passing dev_ptr=iov_base would cause a self-copy (src==dst) on
+            # the USRBIO path, which is a no-op and cannot verify data transfer.
+            host_buf = (ctypes.c_char * data_len)()
+            host_ptr = ctypes.addressof(host_buf)
 
             bytes_read = threefs_reader.read_chunked(
                 path=filepath,
-                dev_ptr=iov_base,
+                dev_ptr=host_ptr,
                 file_offset=real_header_len,
                 total_length=data_len,
             )
             assert bytes_read == data_len
-
-            buf = ctypes.create_string_buffer(data_len)
-            ctypes.memmove(buf, iov_base, data_len)
-            assert buf.raw == expected_data
+            assert bytes(host_buf) == expected_data
 
         mock_reader.close()
 
@@ -275,17 +278,17 @@ class TestDataIntegrity:
             )
             assert bytes_read == data_len
 
-            buf = ctypes.create_string_buffer(data_len)
-            ctypes.memmove(buf, iov_base, data_len)
-            assert buf.raw == expected_raw
+            buf = bytearray(data_len)
+            _copy_target_to_host(iov_base, buf, data_len)
+            assert bytes(buf) == expected_raw
 
 
 # ---------------------------------------------------------------------------
 # TestClose
 # ---------------------------------------------------------------------------
 
-class TestClose:
 
+class TestClose:
     def test_close_releases_fds(self, threefs_reader, tmp_safetensors):
         threefs_reader.read_headers_batch([tmp_safetensors])
         assert threefs_reader.has_fd(tmp_safetensors)
@@ -328,10 +331,10 @@ class TestClose:
 # TestErrorHandling
 # ---------------------------------------------------------------------------
 
-class TestErrorHandling:
 
+class TestErrorHandling:
     def test_read_chunked_nonexistent_raises(self, threefs_reader):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             threefs_reader.read_chunked(
                 path="/nonexistent/model.safetensors",
                 dev_ptr=0,
@@ -340,13 +343,92 @@ class TestErrorHandling:
             )
 
     def test_read_headers_batch_nonexistent_raises(self, threefs_reader):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             threefs_reader.read_headers_batch(["/nonexistent/model.safetensors"])
 
-    def test_read_headers_batch_mixed_paths_raises(
-        self, threefs_reader, tmp_safetensors
-    ):
-        with pytest.raises(Exception):
-            threefs_reader.read_headers_batch(
-                [tmp_safetensors, "/nonexistent/model.safetensors"]
-            )
+    def test_read_headers_batch_mixed_paths_raises(self, threefs_reader, tmp_safetensors):
+        with pytest.raises(Exception):  # noqa: B017
+            threefs_reader.read_headers_batch([tmp_safetensors, "/nonexistent/model.safetensors"])
+
+
+# ---------------------------------------------------------------------------
+# TestPythonBackend
+# ---------------------------------------------------------------------------
+
+
+class TestPythonBackend:
+    """Test Python backend (ThreeFSFileReaderPy) with core test cases.
+
+    These tests mirror the C++ backend tests to ensure both backends
+    have consistent behavior.
+    """
+
+    def test_python_backend_interface(self, threefs_reader_py):
+        """Basic sanity check that Python backend implements the interface."""
+        assert isinstance(threefs_reader_py, FileReaderInterface)
+        assert callable(getattr(threefs_reader_py, "read_chunked", None))
+        assert callable(getattr(threefs_reader_py, "read_headers_batch", None))
+        assert callable(getattr(threefs_reader_py, "close", None))
+
+    def test_python_backend_iov_properties(self, threefs_reader_py):
+        """Verify Python backend has valid IOV properties."""
+        assert isinstance(threefs_reader_py.iov_base, int)
+        assert isinstance(threefs_reader_py.iov_length, int)
+        assert threefs_reader_py.iov_length > 0
+
+    def test_python_backend_read_headers(self, threefs_reader_py, tmp_safetensors):
+        """Test header reading with Python backend."""
+        results = threefs_reader_py.read_headers_batch([tmp_safetensors])
+
+        assert tmp_safetensors in results
+        header_json, header_length, file_size = results[tmp_safetensors]
+
+        parsed = json.loads(header_json)
+        assert isinstance(parsed, dict)
+        assert len(parsed) > 0
+
+        assert header_length == len(header_json.encode("utf-8")) + 8
+        assert file_size == os.path.getsize(tmp_safetensors)
+
+    def test_python_backend_read_chunked(self, threefs_reader_py, tmp_safetensors):
+        """Test chunked reading with Python backend."""
+        file_size = os.path.getsize(tmp_safetensors)
+        bytes_read = threefs_reader_py.read_chunked(
+            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=file_size
+        )
+        assert bytes_read == file_size
+
+    def test_python_backend_data_integrity(self, threefs_reader_py, tmp_safetensors_large):
+        """Test data integrity with Python backend using _copy_target_to_host."""
+        filepath, expected_data = tmp_safetensors_large
+        data_len = len(expected_data)
+
+        real_results = threefs_reader_py.read_headers_batch([filepath])
+        _, header_length, _ = real_results[filepath]
+
+        iov_base = threefs_reader_py.iov_base
+        assert threefs_reader_py.iov_length >= data_len
+
+        bytes_read = threefs_reader_py.read_chunked(
+            path=filepath,
+            dev_ptr=iov_base,
+            file_offset=header_length,
+            total_length=data_len,
+        )
+        assert bytes_read == data_len
+
+        buf = bytearray(data_len)
+        _copy_target_to_host(iov_base, buf, data_len)
+        assert bytes(buf) == expected_data
+
+    def test_python_backend_matches_mock(self, threefs_reader_py, tmp_safetensors):
+        """Verify Python backend produces same results as MockFileReader."""
+        real_results = threefs_reader_py.read_headers_batch([tmp_safetensors])
+        mock_results = MockFileReader().read_headers_batch([tmp_safetensors])
+
+        real_json, real_len, real_size = real_results[tmp_safetensors]
+        mock_json, mock_len, mock_size = mock_results[tmp_safetensors]
+
+        assert json.loads(real_json) == json.loads(mock_json)
+        assert real_len == mock_len
+        assert real_size == mock_size

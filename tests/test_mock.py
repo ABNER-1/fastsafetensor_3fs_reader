@@ -11,13 +11,12 @@ import pytest
 
 from fastsafetensor_3fs_reader import FileReaderInterface, MockFileReader
 
-
 # ---------------------------------------------------------------------------
 # TestMockReaderInterface
 # ---------------------------------------------------------------------------
 
-class TestMockReaderInterface:
 
+class TestMockReaderInterface:
     def test_is_interface_instance(self):
         reader = MockFileReader()
         assert isinstance(reader, FileReaderInterface)
@@ -32,18 +31,34 @@ class TestMockReaderInterface:
 
     def test_read_chunked_signature(self):
         import inspect
+
         params = inspect.signature(MockFileReader.read_chunked).parameters
         for name in ("path", "dev_ptr", "file_offset", "total_length"):
             assert name in params
         assert params["chunk_size"].default == 0
+
+    def test_accepts_extra_kwargs(self):
+        """MockFileReader should accept and ignore backend-specific kwargs
+        (entries, io_depth, buffer_size, etc.) so it can be used as a
+        drop-in replacement when ThreeFSFileReader falls back to mock."""
+        reader = MockFileReader(
+            mount_point="/tmp",
+            entries=64,
+            io_depth=4,
+            buffer_size=64 * 1024 * 1024,
+            mount_name="test",
+            token="fake-token",
+        )
+        assert isinstance(reader, FileReaderInterface)
+        reader.close()
 
 
 # ---------------------------------------------------------------------------
 # TestReadHeadersBatch
 # ---------------------------------------------------------------------------
 
-class TestReadHeadersBatch:
 
+class TestReadHeadersBatch:
     def test_single_file_returns_correct_format(self, tmp_safetensors, mock_reader):
         results = mock_reader.read_headers_batch([tmp_safetensors])
 
@@ -75,17 +90,16 @@ class TestReadHeadersBatch:
         mock_reader.read_headers_batch([tmp_safetensors])
         fd_count_before = len(mock_reader._fd_map)
 
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         assert len(mock_reader._fd_map) == fd_count_before
 
     def test_nonexistent_file_raises(self, mock_reader):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             mock_reader.read_headers_batch(["/nonexistent/path/model.safetensors"])
 
     def test_concurrent_batch_reads(self, tmp_safetensors_multi):
         import threading
+
         results_list = []
         errors = []
 
@@ -140,8 +154,8 @@ class TestReadHeadersBatch:
 # TestReadChunked
 # ---------------------------------------------------------------------------
 
-class TestReadChunked:
 
+class TestReadChunked:
     def test_read_full_file(self, tmp_safetensors, mock_reader):
         file_size = os.path.getsize(tmp_safetensors)
         bytes_read = mock_reader.read_chunked(
@@ -169,21 +183,15 @@ class TestReadChunked:
         assert header_len > 0
 
     def test_fd_reuse_same_path(self, tmp_safetensors, mock_reader):
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=8, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=8, total_length=8)
         assert len(mock_reader._fd_map) == 1
 
     def test_fd_reuse_after_headers_batch(self, tmp_safetensors, mock_reader):
         mock_reader.read_headers_batch([tmp_safetensors])
         assert len(mock_reader._fd_map) == 1
 
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         assert len(mock_reader._fd_map) == 1
 
     def test_nonexistent_file_raises(self, mock_reader):
@@ -217,8 +225,8 @@ class TestReadChunked:
 # TestDataIntegrity
 # ---------------------------------------------------------------------------
 
-class TestDataIntegrity:
 
+class TestDataIntegrity:
     def test_header_bytes_match(self, tmp_safetensors_large, mock_reader):
         filepath, _ = tmp_safetensors_large
         results = mock_reader.read_headers_batch([filepath])
@@ -307,20 +315,16 @@ class TestDataIntegrity:
 # TestClose
 # ---------------------------------------------------------------------------
 
-class TestClose:
 
+class TestClose:
     def test_close_clears_fd_map(self, tmp_safetensors, mock_reader):
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         assert len(mock_reader._fd_map) == 1
         mock_reader.close()
         assert len(mock_reader._fd_map) == 0
 
     def test_reopen_after_close(self, tmp_safetensors, mock_reader):
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         mock_reader.close()
 
         bytes_read = mock_reader.read_chunked(
@@ -338,9 +342,7 @@ class TestClose:
         r1 = MockFileReader()
         r2 = MockFileReader()
         try:
-            r1.read_chunked(
-                path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-            )
+            r1.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
             assert len(r1._fd_map) == 1
             assert len(r2._fd_map) == 0
         finally:
@@ -352,8 +354,8 @@ class TestClose:
 # TestErrorHandling
 # ---------------------------------------------------------------------------
 
-class TestErrorHandling:
 
+class TestErrorHandling:
     def test_read_chunked_nonexistent_raises_oserror(self, mock_reader):
         with pytest.raises(OSError):
             mock_reader.read_chunked(
@@ -364,11 +366,9 @@ class TestErrorHandling:
             )
 
     def test_read_headers_batch_nonexistent_raises(self, mock_reader):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             mock_reader.read_headers_batch(["/nonexistent/model.safetensors"])
 
     def test_read_headers_batch_mixed_paths_raises(self, tmp_safetensors, mock_reader):
-        with pytest.raises(Exception):
-            mock_reader.read_headers_batch(
-                [tmp_safetensors, "/nonexistent/model.safetensors"]
-            )
+        with pytest.raises(Exception):  # noqa: B017
+            mock_reader.read_headers_batch([tmp_safetensors, "/nonexistent/model.safetensors"])
