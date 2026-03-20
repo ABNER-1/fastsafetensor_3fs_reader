@@ -316,3 +316,209 @@ def run_benchmark_round(
         r["round_wall_time"] = round_wall
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# headers_batch benchmark
+# ---------------------------------------------------------------------------
+
+def benchmark_headers_batch_worker_process(
+    rank: int,
+    file_paths: List[str],
+    mount_point: str,
+    backend: str,
+    buffer_size: int,
+    batch_size: int,
+    num_threads: int,
+    num_processes: int,
+    num_iterations: int,
+    results_queue: mp.Queue,
+    verbose: bool = True,
+) -> None:
+    """Worker process that benchmarks ``read_headers_batch`` for the given backend.
+
+    Splits *file_paths* into batches of *batch_size* and calls
+    ``reader.read_headers_batch(batch, num_threads)`` for each batch.
+    Metrics reported per iteration:
+
+    * ``total_files_read``  – number of files whose headers were read
+    * ``headers_per_second`` – aggregate files/s across all batches
+    * ``wall_time``          – wall-clock time for the full iteration
+
+    Args:
+        rank: Process rank (0-based).
+        file_paths: Files assigned to this worker.
+        mount_point: 3FS FUSE mount-point path.
+        backend: Reader backend name (``"python"`` or ``"cpp"``).
+        buffer_size: IOV buffer size in bytes (passed to reader constructor).
+        batch_size: Number of files per ``read_headers_batch`` call.
+        num_threads: ``num_threads`` argument forwarded to ``read_headers_batch``.
+        num_processes: Total concurrent processes (for metadata only).
+        num_iterations: Number of full passes over *file_paths*.
+        results_queue: ``mp.Queue`` to push per-iteration result dicts.
+        verbose: If *True*, print per-iteration progress.
+    """
+    try:
+        reader = _create_reader_for_backend(
+            backend=backend,
+            mount_point=mount_point,
+            buffer_size=buffer_size,
+        )
+
+        if verbose:
+            label = f"[Rank {rank} | {backend} | headers_batch]"
+            print(
+                f"{label} Will read {len(file_paths)} files x "
+                f"{num_iterations} iterations  "
+                f"(batch_size={batch_size}, num_threads={num_threads})"
+            )
+
+        for iteration in range(num_iterations):
+            iter_files = 0
+            iter_start = time.time()
+
+            # Split file_paths into batches of batch_size
+            batches = [
+                file_paths[i : i + batch_size]
+                for i in range(0, len(file_paths), batch_size)
+            ]
+
+            for batch_idx, batch in enumerate(batches):
+                batch_start = time.time()
+                results = reader.read_headers_batch(batch, num_threads)
+                batch_elapsed = time.time() - batch_start
+                iter_files += len(results)
+
+                if verbose:
+                    batch_fps = len(results) / batch_elapsed if batch_elapsed > 0 else 0.0
+                    print(
+                        f"[Rank {rank} | {backend} | headers_batch] "
+                        f"Iter {iteration + 1}/{num_iterations}, "
+                        f"Batch {batch_idx + 1}/{len(batches)}: "
+                        f"{len(results)} files in {batch_elapsed:.3f}s "
+                        f"({batch_fps:.1f} files/s)"
+                    )
+
+            iter_wall = time.time() - iter_start
+            headers_per_second = iter_files / iter_wall if iter_wall > 0 else 0.0
+
+            result: Dict[str, Any] = {
+                "op": "headers_batch",
+                "backend": backend,
+                "buffer_size": buffer_size,
+                "batch_size": batch_size,
+                "num_threads": num_threads,
+                "num_processes": num_processes,
+                "rank": rank,
+                "iteration": iteration,
+                "num_files": len(file_paths),
+                "total_files_read": iter_files,
+                "headers_per_second": headers_per_second,
+                "wall_time": iter_wall,
+                "success": True,
+                "error": None,
+            }
+            results_queue.put(result)
+
+            if verbose:
+                print(
+                    f"[Rank {rank} | {backend} | headers_batch] "
+                    f"Iteration {iteration + 1}/{num_iterations} completed: "
+                    f"{headers_per_second:.1f} files/s  "
+                    f"(wall={iter_wall:.2f}s, files={iter_files})"
+                )
+
+        reader.close()
+
+    except Exception as e:
+        import traceback
+
+        print(f"[Rank {rank} | {backend} | headers_batch] Error: {e}")
+        traceback.print_exc()
+
+        error_result: Dict[str, Any] = {
+            "op": "headers_batch",
+            "backend": backend,
+            "buffer_size": buffer_size,
+            "batch_size": batch_size,
+            "num_threads": num_threads,
+            "num_processes": num_processes,
+            "rank": rank,
+            "iteration": -1,
+            "num_files": len(file_paths),
+            "total_files_read": 0,
+            "headers_per_second": 0.0,
+            "wall_time": 0.0,
+            "success": False,
+            "error": str(e),
+        }
+        results_queue.put(error_result)
+
+
+def run_headers_batch_round(
+    files: List[str],
+    mount_point: str,
+    backend: str,
+    num_processes: int,
+    buffer_size: int,
+    batch_size: int,
+    num_threads: int,
+    num_iterations: int,
+    verbose: bool = True,
+) -> List[Dict[str, Any]]:
+    """Run a single headers_batch benchmark round: spawn workers, collect results.
+
+    Each worker receives a strided subset of *files* and calls
+    ``read_headers_batch`` in batches of *batch_size*.
+
+    Returns a list of per-iteration result dicts from all workers.
+    """
+    process_files = assign_files_to_processes(files, num_processes)
+    actual_num_processes = len(process_files)
+
+    if verbose:
+        print(
+            f"\n--- Round [headers_batch]: backend={backend}, "
+            f"batch_size={batch_size}, num_threads={num_threads}, "
+            f"procs={actual_num_processes} ---"
+        )
+
+    results_queue: mp.Queue = mp.Queue()
+    processes: List[mp.Process] = []
+
+    round_start = time.time()
+
+    for rank, rank_files in enumerate(process_files):
+        p = mp.Process(
+            target=benchmark_headers_batch_worker_process,
+            args=(
+                rank,
+                rank_files,
+                mount_point,
+                backend,
+                buffer_size,
+                batch_size,
+                num_threads,
+                actual_num_processes,
+                num_iterations,
+                results_queue,
+                verbose,
+            ),
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    round_wall = time.time() - round_start
+
+    results: List[Dict[str, Any]] = []
+    while not results_queue.empty():
+        results.append(results_queue.get())
+
+    # Attach the overall wall-clock time to every result record
+    for r in results:
+        r["round_wall_time"] = round_wall
+
+    return results

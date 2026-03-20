@@ -449,7 +449,7 @@ PYBIND11_MODULE(_core_v2, m) {
              py::arg("mount_point"),
              py::arg("entries") = 64,
              py::arg("io_depth") = 0,
-             py::arg("buffer_size") = 1073741824ULL)
+             py::arg("buffer_size") = 67108864ULL)  // 64 MiB
 
         .def("open", &ThreeFSReader::open_file,
              py::arg("path"), py::arg("flags") = O_RDONLY)

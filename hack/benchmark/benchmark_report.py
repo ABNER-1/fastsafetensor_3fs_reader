@@ -493,3 +493,240 @@ def generate_charts(
         print(f"Chart saved: {path}")
 
     return generated
+
+
+# ---------------------------------------------------------------------------
+# 5. headers_batch aggregation, reporting, and CSV export
+# ---------------------------------------------------------------------------
+
+def aggregate_headers_batch_results(
+    raw_results: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Aggregate per-iteration headers_batch results into per-configuration summaries.
+
+    Groups by ``(backend, batch_size, num_threads, num_processes)`` and
+    computes median / mean / min / max / std of ``headers_per_second`` and
+    ``wall_time``.
+
+    Only successful results (``success == True``) are included.
+
+    Returns:
+        A list of summary dicts, one per unique parameter combination.
+    """
+    from collections import defaultdict
+    import statistics
+
+    groups: Dict[Tuple, List[Dict[str, Any]]] = defaultdict(list)
+    for r in raw_results:
+        if not r.get("success", False):
+            continue
+        key = (
+            r["backend"],
+            r["batch_size"],
+            r["num_threads"],
+            r["num_processes"],
+        )
+        groups[key].append(r)
+
+    summaries: List[Dict[str, Any]] = []
+    for (backend, batch_size, num_threads, nprocs), records in sorted(groups.items()):
+        # Group by iteration to compute per-iteration aggregate files/s
+        iter_groups: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+        for rec in records:
+            iter_groups[rec["iteration"]].append(rec)
+
+        iter_fps: List[float] = []
+        iter_wall_times: List[float] = []
+        for _iter_id, iter_recs in sorted(iter_groups.items()):
+            total_files = sum(r["total_files_read"] for r in iter_recs)
+            round_wall = iter_recs[0].get(
+                "round_wall_time", max(r["wall_time"] for r in iter_recs)
+            )
+            fps = total_files / round_wall if round_wall > 0 else 0.0
+            iter_fps.append(fps)
+            iter_wall_times.append(round_wall)
+
+        if not iter_fps:
+            continue
+
+        summaries.append(
+            {
+                "backend": backend,
+                "batch_size": batch_size,
+                "num_threads": num_threads,
+                "num_processes": nprocs,
+                "headers_per_second_median": statistics.median(iter_fps),
+                "headers_per_second_mean": statistics.mean(iter_fps),
+                "headers_per_second_min": min(iter_fps),
+                "headers_per_second_max": max(iter_fps),
+                "headers_per_second_std": (
+                    statistics.stdev(iter_fps) if len(iter_fps) > 1 else 0.0
+                ),
+                "wall_time_median": statistics.median(iter_wall_times),
+                "wall_time_mean": statistics.mean(iter_wall_times),
+                "num_iterations": len(iter_fps),
+            }
+        )
+
+    return summaries
+
+
+def print_headers_batch_report(summaries: List[Dict[str, Any]]) -> None:
+    """Print a formatted console report for headers_batch benchmark results."""
+
+    if not summaries:
+        print("No headers_batch benchmark results to report.")
+        return
+
+    by_backend: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for s in summaries:
+        by_backend[s["backend"]].append(s)
+
+    best_per_backend: Dict[str, Dict[str, Any]] = {}
+    for backend, rows in by_backend.items():
+        best = max(rows, key=lambda r: r["headers_per_second_median"])
+        best_per_backend[backend] = best
+
+    for backend in sorted(by_backend.keys()):
+        rows = sorted(
+            by_backend[backend],
+            key=lambda r: (r["batch_size"], r["num_threads"], r["num_processes"]),
+        )
+        best = best_per_backend[backend]
+
+        print(f"\n{'=' * 90}")
+        print(f"[headers_batch] Backend: {backend}")
+        print(f"{'=' * 90}")
+        header = (
+            f"{'batch_size':<12} {'num_threads':<13} {'procs':<8} "
+            f"{'files/s':<20} {'wall_time(s)':<14} {'std':<10}"
+        )
+        print(header)
+        print(f"{'-' * 90}")
+
+        for r in rows:
+            is_best = (
+                r["batch_size"] == best["batch_size"]
+                and r["num_threads"] == best["num_threads"]
+                and r["num_processes"] == best["num_processes"]
+            )
+            marker = " ***" if is_best else ""
+            print(
+                f"{r['batch_size']:<12} {r['num_threads']:<13} "
+                f"{r['num_processes']:<8} "
+                f"{r['headers_per_second_median']:<20.1f} "
+                f"{r['wall_time_median']:<14.3f} "
+                f"{r['headers_per_second_std']:<10.1f}{marker}"
+            )
+
+        print(
+            f"\n  Best: batch_size={best['batch_size']}, "
+            f"num_threads={best['num_threads']}, "
+            f"procs={best['num_processes']} -> "
+            f"{best['headers_per_second_median']:.1f} files/s"
+        )
+
+    # Cross-backend comparison
+    if len(best_per_backend) > 1:
+        print(f"\n{'=' * 90}")
+        print("[headers_batch] Cross-Backend Comparison (best params per backend)")
+        print(f"{'=' * 90}")
+        header = (
+            f"{'Backend':<10} {'Best Config':<35} "
+            f"{'files/s':<20} {'Speedup':<10}"
+        )
+        print(header)
+        print(f"{'-' * 90}")
+
+        sorted_backends = sorted(
+            best_per_backend.items(),
+            key=lambda kv: kv[1]["headers_per_second_median"],
+        )
+        baseline_fps = sorted_backends[0][1]["headers_per_second_median"]
+
+        for backend, best in sorted_backends:
+            config = (
+                f"batch={best['batch_size']} "
+                f"threads={best['num_threads']} "
+                f"p={best['num_processes']}"
+            )
+            speedup = (
+                best["headers_per_second_median"] / baseline_fps
+                if baseline_fps > 0
+                else 0.0
+            )
+            print(
+                f"{backend:<10} {config:<35} "
+                f"{best['headers_per_second_median']:<20.1f} "
+                f"{speedup:<10.2f}x"
+            )
+
+    print(f"\n{'=' * 90}\n")
+
+
+def export_headers_batch_csv(
+    raw_results: List[Dict[str, Any]],
+    summaries: List[Dict[str, Any]],
+    output_dir: str,
+) -> Tuple[str, str]:
+    """Write headers_batch raw and summary CSV files to *output_dir*.
+
+    Returns:
+        ``(raw_csv_path, summary_csv_path)``
+    """
+    import csv as _csv
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # ---- Raw CSV -----------------------------------------------------------
+    raw_path = os.path.join(output_dir, "benchmark_headers_batch_raw.csv")
+    raw_fields = [
+        "op",
+        "backend",
+        "buffer_size",
+        "batch_size",
+        "num_threads",
+        "num_processes",
+        "rank",
+        "iteration",
+        "num_files",
+        "total_files_read",
+        "headers_per_second",
+        "wall_time",
+        "round_wall_time",
+        "success",
+        "error",
+    ]
+    with open(raw_path, "w", newline="") as f:
+        writer = _csv.DictWriter(f, fieldnames=raw_fields, extrasaction="ignore")
+        writer.writeheader()
+        for r in raw_results:
+            writer.writerow(r)
+
+    # ---- Summary CSV -------------------------------------------------------
+    summary_path = os.path.join(output_dir, "benchmark_headers_batch_summary.csv")
+    summary_fields = [
+        "backend",
+        "batch_size",
+        "num_threads",
+        "num_processes",
+        "headers_per_second_median",
+        "headers_per_second_mean",
+        "headers_per_second_min",
+        "headers_per_second_max",
+        "headers_per_second_std",
+        "wall_time_median",
+        "wall_time_mean",
+        "num_iterations",
+    ]
+    with open(summary_path, "w", newline="") as f:
+        writer = _csv.DictWriter(
+            f, fieldnames=summary_fields, extrasaction="ignore"
+        )
+        writer.writeheader()
+        for s in summaries:
+            writer.writerow(s)
+
+    print(f"CSV exported: {raw_path}")
+    print(f"CSV exported: {summary_path}")
+    return raw_path, summary_path

@@ -74,12 +74,15 @@ if _HACK_DIR not in sys.path:
 # The package is imported lazily inside benchmark_worker_process() instead,
 # exactly as test_usrbio_common.py does.
 
-from benchmark_worker import run_benchmark_round
+from benchmark_worker import run_benchmark_round, run_headers_batch_round
 from benchmark_report import (
     aggregate_results,
     export_csv,
     generate_charts,
     print_console_report,
+    aggregate_headers_batch_results,
+    print_headers_batch_report,
+    export_headers_batch_csv,
 )
 
 
@@ -157,6 +160,35 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_int_list,
         default=[1, 2, 4, 8],
         help="Comma-separated process counts (default: 1,2,4,8)",
+    )
+
+    # headers_batch benchmark parameters
+    parser.add_argument(
+        "--benchmark-op",
+        choices=["read_chunked", "headers_batch", "both"],
+        default="read_chunked",
+        help=(
+            "Which operation to benchmark: read_chunked, headers_batch, or both "
+            "(default: read_chunked)"
+        ),
+    )
+    parser.add_argument(
+        "--batch-sizes",
+        type=_parse_int_list,
+        default=[8, 16, 32, 64, 128],
+        help=(
+            "Comma-separated file batch sizes for headers_batch benchmark "
+            "(default: 8,16,32,64,128)"
+        ),
+    )
+    parser.add_argument(
+        "--num-threads",
+        type=_parse_int_list,
+        default=[4, 8, 16],
+        help=(
+            "Comma-separated num_threads values for headers_batch "
+            "(default: 4,8,16)"
+        ),
     )
 
     # Execution control
@@ -268,6 +300,36 @@ def generate_combinations(
     return combos
 
 
+def generate_headers_batch_combinations(
+    backends: List[str],
+    batch_sizes: List[int],
+    num_threads_list: List[int],
+    num_processes_list: List[int],
+) -> List[Dict[str, Any]]:
+    """Generate all valid (backend, batch_size, num_threads, num_processes)
+    combinations for the headers_batch benchmark.
+
+    The ``mock`` backend is excluded because its ``read_headers_batch``
+    performs no real I/O and is not meaningful to benchmark.
+    """
+    combos: List[Dict[str, Any]] = []
+    for backend in backends:
+        if backend == "mock":
+            continue  # mock has no real I/O for headers_batch
+        for batch_size in batch_sizes:
+            for num_threads in num_threads_list:
+                for nprocs in num_processes_list:
+                    combos.append(
+                        {
+                            "backend": backend,
+                            "batch_size": batch_size,
+                            "num_threads": num_threads,
+                            "num_processes": nprocs,
+                        }
+                    )
+    return combos
+
+
 # ---------------------------------------------------------------------------
 # Main benchmark loop
 # ---------------------------------------------------------------------------
@@ -283,6 +345,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     verbose = args.verbose and not args.quiet
+    benchmark_op = args.benchmark_op  # "read_chunked", "headers_batch", or "both"
 
     print(f"\n{'#' * 90}")
     print(f"  3FS Reader Benchmark")
@@ -293,134 +356,223 @@ def run_benchmark(args: argparse.Namespace) -> None:
     total_size = sum(os.path.getsize(f) for f in files)
     print(f"  Total size    : {total_size / 1024 / 1024 / 1024:.2f} GB")
     print(f"  Backends      : {', '.join(args.backends)}")
-    print(f"  Buffer sizes  : {args.buffer_sizes} MB")
-    print(f"  Chunk sizes   : {args.chunk_sizes} MB")
+    print(f"  Benchmark op  : {benchmark_op}")
+    if benchmark_op in ("read_chunked", "both"):
+        print(f"  Buffer sizes  : {args.buffer_sizes} MB")
+        print(f"  Chunk sizes   : {args.chunk_sizes} MB")
+    if benchmark_op in ("headers_batch", "both"):
+        print(f"  Batch sizes   : {args.batch_sizes} files")
+        print(f"  Num threads   : {args.num_threads}")
     print(f"  Num processes : {args.num_processes}")
     print(f"  Iterations    : {args.iterations}")
     print(f"  Warmup        : {args.warmup}")
     print(f"  Mode          : {args.mode}")
-    print(f"  Download only : {args.download_only}")
+    if benchmark_op in ("read_chunked", "both"):
+        print(f"  Download only : {args.download_only}")
     print(f"  Output dir    : {args.output_dir}")
     equal_only = not args.no_equal_chunk_buffer
-    print(
-        f"  Constraint    : "
-        f"{'chunk == buffer (equal mode)' if equal_only else 'chunk <= buffer (full grid)'}"
-    )
+    if benchmark_op in ("read_chunked", "both"):
+        print(
+            f"  Constraint    : "
+            f"{'chunk == buffer (equal mode)' if equal_only else 'chunk <= buffer (full grid)'}"
+        )
     print(f"{'#' * 90}\n")
 
-    # ---- Generate parameter combinations ----------------------------------
-    combos = generate_combinations(
-        backends=args.backends,
-        buffer_sizes_mb=args.buffer_sizes,
-        chunk_sizes_mb=args.chunk_sizes,
-        num_processes_list=args.num_processes,
-        equal_only=equal_only,
-    )
-
-    if not combos:
-        print("ERROR: No valid parameter combinations generated.")
-        sys.exit(1)
-
-    print(f"Total parameter combinations: {len(combos)}")
-
-    # ---- Run benchmark -----------------------------------------------------
-    all_raw_results: List[Dict[str, Any]] = []
     benchmark_start = time.time()
 
-    for idx, combo in enumerate(combos, 1):
-        backend = combo["backend"]
-        buf_mb = combo["buffer_size_mb"]
-        chunk_mb = combo["chunk_size_mb"]
-        nprocs = combo["num_processes"]
-
-        # Convert MB to bytes (mock uses placeholder 0)
-        buffer_size = buf_mb * 1024 * 1024 if buf_mb > 0 else 64 * 1024 * 1024
-        chunk_size = chunk_mb * 1024 * 1024 if chunk_mb > 0 else 64 * 1024 * 1024
-
-        progress = f"[{idx}/{len(combos)}]"
-        print(
-            f"\n{'=' * 90}\n"
-            f"{progress} backend={backend}, "
-            f"buffer={buf_mb}MB, chunk={chunk_mb}MB, procs={nprocs}\n"
-            f"{'=' * 90}"
+    # ==========================================================================
+    # read_chunked benchmark
+    # ==========================================================================
+    if benchmark_op in ("read_chunked", "both"):
+        combos = generate_combinations(
+            backends=args.backends,
+            buffer_sizes_mb=args.buffer_sizes,
+            chunk_sizes_mb=args.chunk_sizes,
+            num_processes_list=args.num_processes,
+            equal_only=equal_only,
         )
 
-        # ---- Warmup --------------------------------------------------------
-        if args.warmup > 0:
-            print(f"  Warmup: {args.warmup} round(s)...")
-            for w in range(args.warmup):
-                run_benchmark_round(
+        if not combos:
+            print("WARNING: No valid read_chunked parameter combinations generated.")
+        else:
+            print(f"[read_chunked] Total parameter combinations: {len(combos)}")
+            all_raw_results: List[Dict[str, Any]] = []
+
+            for idx, combo in enumerate(combos, 1):
+                backend = combo["backend"]
+                buf_mb = combo["buffer_size_mb"]
+                chunk_mb = combo["chunk_size_mb"]
+                nprocs = combo["num_processes"]
+
+                buffer_size = buf_mb * 1024 * 1024 if buf_mb > 0 else 64 * 1024 * 1024
+                chunk_size = chunk_mb * 1024 * 1024 if chunk_mb > 0 else 64 * 1024 * 1024
+
+                progress = f"[{idx}/{len(combos)}]"
+                print(
+                    f"\n{'=' * 90}\n"
+                    f"{progress} [read_chunked] backend={backend}, "
+                    f"buffer={buf_mb}MB, chunk={chunk_mb}MB, procs={nprocs}\n"
+                    f"{'=' * 90}"
+                )
+
+                if args.warmup > 0:
+                    print(f"  Warmup: {args.warmup} round(s)...")
+                    for _w in range(args.warmup):
+                        run_benchmark_round(
+                            files=files,
+                            mount_point=args.mount_point,
+                            backend=backend,
+                            num_processes=nprocs,
+                            buffer_size=buffer_size,
+                            chunk_size=chunk_size,
+                            num_iterations=1,
+                            verbose=False,
+                            download_only=args.download_only,
+                        )
+                    print("  Warmup complete.")
+
+                round_results = run_benchmark_round(
                     files=files,
                     mount_point=args.mount_point,
                     backend=backend,
                     num_processes=nprocs,
                     buffer_size=buffer_size,
                     chunk_size=chunk_size,
-                    num_iterations=1,
-                    verbose=False,
+                    num_iterations=args.iterations,
+                    verbose=verbose,
                     download_only=args.download_only,
                 )
-            print("  Warmup complete.")
 
-        # ---- Measured runs -------------------------------------------------
-        round_results = run_benchmark_round(
-            files=files,
-            mount_point=args.mount_point,
-            backend=backend,
-            num_processes=nprocs,
-            buffer_size=buffer_size,
-            chunk_size=chunk_size,
-            num_iterations=args.iterations,
-            verbose=verbose,
-            download_only=args.download_only,
+                all_raw_results.extend(round_results)
+
+                successful = [r for r in round_results if r.get("success")]
+                if successful:
+                    total_bytes = sum(r["total_bytes_read"] for r in successful)
+                    round_wall = successful[0].get(
+                        "round_wall_time",
+                        max(r["wall_time"] for r in successful),
+                    )
+                    agg_gbps = (
+                        (total_bytes / 1024 / 1024 / 1024) / round_wall
+                        if round_wall > 0
+                        else 0.0
+                    )
+                    print(
+                        f"  Round result: {agg_gbps:.3f} GB/s aggregate "
+                        f"({total_bytes / 1024 / 1024 / 1024:.2f} GB in {round_wall:.2f}s)"
+                    )
+                else:
+                    failed = [r for r in round_results if not r.get("success")]
+                    if failed:
+                        print(f"  Round FAILED: {failed[0].get('error', 'unknown')}")
+
+            summaries = aggregate_results(all_raw_results)
+            print_console_report(summaries)
+            export_csv(
+                raw_results=all_raw_results,
+                summaries=summaries,
+                output_dir=args.output_dir,
+            )
+            if not args.no_charts:
+                generate_charts(summaries=summaries, output_dir=args.output_dir)
+
+    # ==========================================================================
+    # headers_batch benchmark
+    # ==========================================================================
+    if benchmark_op in ("headers_batch", "both"):
+        hb_combos = generate_headers_batch_combinations(
+            backends=args.backends,
+            batch_sizes=args.batch_sizes,
+            num_threads_list=args.num_threads,
+            num_processes_list=args.num_processes,
         )
 
-        all_raw_results.extend(round_results)
-
-        # Quick per-round summary
-        successful = [r for r in round_results if r.get("success")]
-        if successful:
-            total_bytes = sum(r["total_bytes_read"] for r in successful)
-            # Use the round_wall_time from the first result (same for all in a round)
-            round_wall = successful[0].get(
-                "round_wall_time",
-                max(r["wall_time"] for r in successful),
-            )
-            agg_gbps = (
-                (total_bytes / 1024 / 1024 / 1024) / round_wall
-                if round_wall > 0
-                else 0.0
-            )
+        if not hb_combos:
             print(
-                f"  Round result: {agg_gbps:.3f} GB/s aggregate "
-                f"({total_bytes / 1024 / 1024 / 1024:.2f} GB in {round_wall:.2f}s)"
+                "WARNING: No valid headers_batch parameter combinations generated. "
+                "Make sure at least one non-mock backend is specified."
             )
         else:
-            failed = [r for r in round_results if not r.get("success")]
-            if failed:
-                print(f"  Round FAILED: {failed[0].get('error', 'unknown')}")
+            print(f"\n[headers_batch] Total parameter combinations: {len(hb_combos)}")
+            # Use a representative buffer_size for reader construction
+            buf_bytes = (args.buffer_sizes[0] if args.buffer_sizes else 64) * 1024 * 1024
+            all_hb_results: List[Dict[str, Any]] = []
+
+            for idx, combo in enumerate(hb_combos, 1):
+                backend = combo["backend"]
+                batch_size = combo["batch_size"]
+                num_threads = combo["num_threads"]
+                nprocs = combo["num_processes"]
+
+                progress = f"[{idx}/{len(hb_combos)}]"
+                print(
+                    f"\n{'=' * 90}\n"
+                    f"{progress} [headers_batch] backend={backend}, "
+                    f"batch_size={batch_size}, num_threads={num_threads}, procs={nprocs}\n"
+                    f"{'=' * 90}"
+                )
+
+                if args.warmup > 0:
+                    print(f"  Warmup: {args.warmup} round(s)...")
+                    for _w in range(args.warmup):
+                        run_headers_batch_round(
+                            files=files,
+                            mount_point=args.mount_point,
+                            backend=backend,
+                            num_processes=nprocs,
+                            buffer_size=buf_bytes,
+                            batch_size=batch_size,
+                            num_threads=num_threads,
+                            num_iterations=1,
+                            verbose=False,
+                        )
+                    print("  Warmup complete.")
+
+                round_results = run_headers_batch_round(
+                    files=files,
+                    mount_point=args.mount_point,
+                    backend=backend,
+                    num_processes=nprocs,
+                    buffer_size=buf_bytes,
+                    batch_size=batch_size,
+                    num_threads=num_threads,
+                    num_iterations=args.iterations,
+                    verbose=verbose,
+                )
+
+                all_hb_results.extend(round_results)
+
+                successful = [r for r in round_results if r.get("success")]
+                if successful:
+                    total_files = sum(r["total_files_read"] for r in successful)
+                    round_wall = successful[0].get(
+                        "round_wall_time",
+                        max(r["wall_time"] for r in successful),
+                    )
+                    agg_fps = total_files / round_wall if round_wall > 0 else 0.0
+                    print(
+                        f"  Round result: {agg_fps:.1f} files/s aggregate "
+                        f"({total_files} files in {round_wall:.2f}s)"
+                    )
+                else:
+                    failed = [r for r in round_results if not r.get("success")]
+                    if failed:
+                        print(f"  Round FAILED: {failed[0].get('error', 'unknown')}")
+
+            hb_summaries = aggregate_headers_batch_results(all_hb_results)
+            print_headers_batch_report(hb_summaries)
+            export_headers_batch_csv(
+                raw_results=all_hb_results,
+                summaries=hb_summaries,
+                output_dir=args.output_dir,
+            )
 
     benchmark_elapsed = time.time() - benchmark_start
     print(f"\n{'#' * 90}")
     print(f"  Benchmark completed in {benchmark_elapsed:.1f}s")
     print(f"{'#' * 90}\n")
 
-    # ---- Aggregate and report ----------------------------------------------
-    summaries = aggregate_results(all_raw_results)
-
-    print_console_report(summaries)
-
-    raw_csv, summary_csv = export_csv(
-        raw_results=all_raw_results,
-        summaries=summaries,
-        output_dir=args.output_dir,
-    )
-
-    if not args.no_charts:
-        generate_charts(summaries=summaries, output_dir=args.output_dir)
-
     print(f"\nAll results saved to: {os.path.abspath(args.output_dir)}")
-
 
 # ---------------------------------------------------------------------------
 # Entry point

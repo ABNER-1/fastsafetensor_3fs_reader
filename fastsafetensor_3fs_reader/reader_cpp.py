@@ -50,7 +50,7 @@ class ThreeFSFileReaderCpp(FileReaderInterface):
         mount_point: str,
         entries: int = 64,
         io_depth: int = 0,
-        buffer_size: int = 64 * 1024 * 1024,  # 1 GiB
+        buffer_size: int = 64 * 1024 * 1024,  # 64 MiB
     ) -> None:
         self._reader = _core_v2.ThreeFSReader(
             mount_point=mount_point,
