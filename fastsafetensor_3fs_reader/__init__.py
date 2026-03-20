@@ -6,6 +6,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from ._mount_utils import extract_mount_point  # noqa: E402
 from .interface import FileReaderInterface  # noqa: E402
 from .mock import MockFileReader  # noqa: E402
 
@@ -153,6 +154,7 @@ __all__ = [
     "FileReaderInterface",
     "ThreeFSFileReader",
     "MockFileReader",
+    "extract_mount_point",
     "is_available",
     "get_backend",
     "create_reader",

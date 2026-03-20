@@ -120,8 +120,11 @@ class ThreeFSFileReaderPy(FileReaderInterface):
         # buffer_size must be >= entries * _page_size.
         self._page_size: int = max(1, buffer_size // entries)
 
-        # File descriptor cache: path -> OS fd
-        self._fd_map: dict[str, int] = {}
+        # File descriptor cache: path -> (fd, is_usrbio)
+        # is_usrbio=True means the fd is registered with USRBIO (file is on the
+        # 3FS mount point); is_usrbio=False means it is a plain OS fd that must
+        # use the os.pread fallback path.
+        self._fd_map: dict[str, tuple[int, bool]] = {}
         self._fd_lock = threading.Lock()
 
         # USRBIO state (hf3fs_fuse.io path)
@@ -248,7 +251,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
 
         do_time = _debug_enabled()
 
-        fd = self._get_or_open_fd(path)
+        fd, is_usrbio = self._get_or_open_fd(path)
 
         if chunk_size <= 0:
             chunk_size = min(total_length, self._buffer_size)
@@ -262,7 +265,9 @@ class ThreeFSFileReaderPy(FileReaderInterface):
             file_offset,
             total_length,
             chunk_size,
-            "usrbio" if (self._ior is not None and self._iov is not None) else "os.pread",
+            "usrbio"
+            if (is_usrbio and self._ior is not None and self._iov is not None)
+            else "os.pread",
         )
 
         bytes_read_total = 0
@@ -284,7 +289,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
             # directly from the iov C pointer to the target (no staging copy).
             this_window = min(remaining, self._buffer_size)
 
-            if self._ior is not None and self._iov is not None:
+            if is_usrbio and self._ior is not None and self._iov is not None:
                 # --- phase 1: batch preadv (USRBIO) -------------------------
                 t0 = _time.monotonic() if do_time else 0.0
                 actual = self._usrbio_read_batch(fd, cur_file_off, this_window)
@@ -355,7 +360,9 @@ class ThreeFSFileReaderPy(FileReaderInterface):
             chunk_count += 1
 
             if actual < (
-                this_window if (self._ior is not None and self._iov is not None) else this_chunk
+                this_window
+                if (is_usrbio and self._ior is not None and self._iov is not None)
+                else this_chunk
             ):
                 break  # short read -> EOF
 
@@ -440,9 +447,9 @@ class ThreeFSFileReaderPy(FileReaderInterface):
     def close(self) -> None:
         """Release all resources: close cached fds, destroy ioring/iovec/shm."""
         with self._fd_lock:
-            for fd in self._fd_map.values():
-                # Deregister fd from USRBIO before closing (mirrors C++ hf3fs_dereg_fd)
-                if self._ior is not None and deregister_fd is not None:
+            for fd, is_usrbio in self._fd_map.values():
+                # Deregister fd from USRBIO before closing (only if it was registered)
+                if is_usrbio and deregister_fd is not None:
                     try:
                         deregister_fd(fd)
                     except Exception:
@@ -474,37 +481,53 @@ class ThreeFSFileReaderPy(FileReaderInterface):
 
     # -- internal: file descriptor management --------------------------------
 
-    def _get_or_open_fd(self, path: str) -> int:
-        """Return a cached fd or open a new one (thread-safe)."""
+    def _get_or_open_fd(self, path: str) -> tuple[int, bool]:
+        """Return a cached (fd, is_usrbio) pair or open a new fd (thread-safe).
+
+        ``is_usrbio`` is True when the file lives on the 3FS mount point and
+        the fd has been registered with USRBIO via ``register_fd``.  Callers
+        must use the fallback ``os.pread`` path when ``is_usrbio`` is False.
+        """
         with self._fd_lock:
             if path in self._fd_map:
+                fd, is_usrbio = self._fd_map[path]
                 # [PERF_DEBUG] fd cache hit
                 logger.debug(
-                    "[PERF_DEBUG] _get_or_open_fd path=%r cache_hit=True fd=%d",
+                    "[PERF_DEBUG] _get_or_open_fd path=%r cache_hit=True fd=%d is_usrbio=%s",
                     path,
-                    self._fd_map[path],
+                    fd,
+                    is_usrbio,
                 )
                 return self._fd_map[path]
         # [PERF_DEBUG] fd cache miss, opening new fd
         logger.debug("[PERF_DEBUG] _get_or_open_fd path=%r cache_hit=False", path)
         fd = os.open(path, os.O_RDONLY)
-        # Register fd with USRBIO if in usrbio mode (mirrors C++ hf3fs_reg_fd)
-        if self._ior is not None and register_fd is not None:
+        # Only register with USRBIO if the file is on the 3FS mount point.
+        # Calling register_fd on a non-3FS fd returns EBADF (errno 9).
+        is_usrbio = (
+            self._ior is not None and register_fd is not None and path.startswith(self._mount_point)
+        )
+        if is_usrbio:
             register_fd(fd)
         with self._fd_lock:
             # Double-check: another thread may have opened the same path
             if path in self._fd_map:
                 # Another thread opened it; close ours (and deregister if needed)
-                if self._ior is not None and deregister_fd is not None:
+                if is_usrbio and deregister_fd is not None:
                     try:
                         deregister_fd(fd)
                     except Exception:
                         pass
                 os.close(fd)
                 return self._fd_map[path]
-            self._fd_map[path] = fd
-        logger.debug("[PERF_DEBUG] _get_or_open_fd path=%r opened fd=%d", path, fd)
-        return fd
+            self._fd_map[path] = (fd, is_usrbio)
+        logger.debug(
+            "[PERF_DEBUG] _get_or_open_fd path=%r opened fd=%d is_usrbio=%s",
+            path,
+            fd,
+            is_usrbio,
+        )
+        return (fd, is_usrbio)
 
     # -- internal: header reading --------------------------------------------
 
@@ -548,12 +571,27 @@ class ThreeFSFileReaderPy(FileReaderInterface):
                 file_size,
             )
 
-            # Cache the fd for later read_chunked reuse
+            # Cache the fd for later read_chunked reuse.
+            # Determine is_usrbio the same way _get_or_open_fd does so that
+            # read_chunked picks the correct I/O path when it reuses this fd.
+            _is_usrbio = (
+                self._ior is not None
+                and register_fd is not None
+                and path.startswith(self._mount_point)
+            )
+            if _is_usrbio:
+                register_fd(fd)
             with self._fd_lock:
                 if path in self._fd_map:
+                    # Another thread already cached this path; discard ours.
+                    if _is_usrbio and deregister_fd is not None:
+                        try:
+                            deregister_fd(fd)
+                        except Exception:
+                            pass
                     os.close(fd)
                 else:
-                    self._fd_map[path] = fd
+                    self._fd_map[path] = (fd, _is_usrbio)
 
             logger.debug(
                 "[PERF_DEBUG] _read_single_header DONE path=%r total=%.2fms",

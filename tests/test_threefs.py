@@ -14,7 +14,6 @@ import struct
 import pytest
 
 from fastsafetensor_3fs_reader import FileReaderInterface, MockFileReader, is_available
-from fastsafetensor_3fs_reader._cuda_utils import _copy_target_to_host
 
 pytestmark = pytest.mark.skipif(
     not is_available() or not os.environ.get("THREEFS_MOUNT_POINT"),
