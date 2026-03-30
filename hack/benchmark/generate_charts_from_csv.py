@@ -42,8 +42,8 @@ def load_summary_csv(csv_path: str) -> List[Dict[str, Any]]:
         for row in reader:
             record = {
                 "backend": row["backend"],
-                "buffer_size_mb": int(row["buffer_size_mb"]),
-                "chunk_size_mb": int(row["chunk_size_mb"]),
+                "buffer_size_mb": float(row["buffer_size_mb"]),
+                "chunk_size_mb": float(row["chunk_size_mb"]),
                 "num_processes": int(row["num_processes"]),
                 "throughput_gbps_median": float(row["throughput_gbps_median"]),
                 "throughput_gbps_mean": float(row["throughput_gbps_mean"]),

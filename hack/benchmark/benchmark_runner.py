@@ -94,6 +94,15 @@ def _parse_int_list(value: str) -> List[int]:
     """Parse a comma-separated string of integers."""
     return [int(x.strip()) for x in value.split(",") if x.strip()]
 
+def _parse_float_list(value: str) -> List[float]:
+    """Parse a comma-separated string of numbers (int or float, e.g. '0.5,1,2,4')."""
+    try:
+        return [float(x.strip()) for x in value.split(",") if x.strip()]
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid value {value!r}: expected comma-separated numbers (e.g. '0.5,1,2,4')"
+        )
+
 
 def _parse_str_list(value: str) -> List[str]:
     """Parse a comma-separated string of names."""
@@ -133,13 +142,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--buffer-sizes",
-        type=_parse_int_list,
+        type=_parse_float_list,
         default=[64, 128, 256, 512, 1024],
-        help="Comma-separated buffer sizes in MB (default: 64,128,256,512,1024)",
+        help="Comma-separated buffer sizes in MB (default: 64,128,256,512,1024; supports floats e.g. 0.5,1,2)",
     )
     parser.add_argument(
         "--chunk-sizes",
-        type=_parse_int_list,
+        type=_parse_float_list,
         default=[64, 128, 256, 512, 1024],
         help=(
             "Comma-separated chunk sizes in MB "
@@ -248,8 +257,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def generate_combinations(
     backends: List[str],
-    buffer_sizes_mb: List[int],
-    chunk_sizes_mb: List[int],
+    buffer_sizes_mb: List[float],
+    chunk_sizes_mb: List[float],
     num_processes_list: List[int],
     equal_only: bool = True,
 ) -> List[Dict[str, Any]]:
