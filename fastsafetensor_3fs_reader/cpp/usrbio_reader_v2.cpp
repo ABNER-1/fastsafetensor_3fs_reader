@@ -57,11 +57,27 @@ bool debug_enabled() {
     return val;
 }
 
-template <typename... Args>
-void dbg(const char *fmt, Args... args) {
+// Zero-arg overload: avoids -Werror=format-security when dbg() is called
+// with no format arguments (e.g. dbg("message")).
+void dbg(const char *msg) {
+    if (debug_enabled()) {
+        fprintf(stderr, "[ThreeFSReader_v2] %s\n", msg);
+        fflush(stderr);
+    }
+}
+
+template <typename Arg0, typename... Args>
+void dbg(const char *fmt, Arg0 arg0, Args... args) {
     if (debug_enabled()) {
         fprintf(stderr, "[ThreeFSReader_v2] ");
-        fprintf(stderr, fmt, args...);
+        // fmt is always a string literal at all call sites in this file.
+        // The zero-arg overload above handles the no-argument case, so
+        // this template is only instantiated when at least one format
+        // argument is present, satisfying -Wformat-security.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+        fprintf(stderr, fmt, arg0, args...);
+#pragma GCC diagnostic pop
         fprintf(stderr, "\n");
         fflush(stderr);
     }
@@ -419,8 +435,8 @@ public:
             // This ensures the H2D copy of chunk N-1 overlaps with the
             // 3FS network I/O of chunk N.
             char* bufs[2] = {
-                static_cast<char*>(iov_.base),
-                static_cast<char*>(iov_.base) + half_buf
+                reinterpret_cast<char*>(iov_.base),
+                reinterpret_cast<char*>(iov_.base) + half_buf
             };
             int  cur_buf         = 0;   // index into bufs[] for current IO
             bool has_pending_copy = false;
