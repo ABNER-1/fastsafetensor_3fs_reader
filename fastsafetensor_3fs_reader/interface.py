@@ -17,11 +17,25 @@ class FileReaderInterface(ABC):
         file_offset: int,
         total_length: int,
         chunk_size: int = 0,
+        pipelined: bool = False,
     ) -> int:
         """Read file data into target memory address.
 
         Manages fd automatically: reuses cached fd from read_headers_batch,
         or opens a new one and keeps it for subsequent calls.
+
+        Args:
+            path: File path to read from.
+            dev_ptr: Target memory address (GPU or host).
+            file_offset: Offset in file to start reading.
+            total_length: Total bytes to read.
+            chunk_size: Chunk size for I/O (0 = auto).
+            pipelined: If True, use double-buffered pipelined I/O with async
+                H2D copy to overlap network I/O and GPU transfer.
+                Note: only takes effect when dev_ptr points to GPU memory
+                and a CUDA stream was successfully created during
+                initialization. Falls back to non-pipelined mode silently
+                otherwise.
 
         Returns bytes actually read.
         """

@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -87,6 +86,10 @@ private:
     struct hf3fs_ior ior_{};
     bool iov_pinned_ = false;  // true if iov_.base is registered as CUDA pinned memory
 
+    // CUDA Stream for async H2D copy (pipelined mode)
+    cudaStream_t copy_stream_{};
+    bool stream_created_ = false;
+
     std::mutex mu_;
     std::map<std::string, int> fd_map_;
 
@@ -153,6 +156,45 @@ private:
         }
     }
 
+    // Helper for async copy (used in pipelined mode).
+    // src: source buffer pointer; if nullptr, defaults to iov_.base.
+    // Note: for host-to-host transfers cudaMemcpyAsync is effectively
+    // synchronous per CUDA documentation, so pipelining only benefits
+    // GPU (device) targets.
+    void copy_iov_to_target_async(uintptr_t target, int64_t nbytes,
+                                  cudaStream_t stream, void* src = nullptr) {
+        if (target == 0 || nbytes == 0) return;
+
+        void* copy_src = src ? src : iov_.base;
+
+        // Try cudaMemcpyAsync with cudaMemcpyDefault (safe for both host and device)
+        cudaError_t cpy = cudaMemcpyAsync(reinterpret_cast<void *>(target),
+                                          copy_src,
+                                          static_cast<size_t>(nbytes),
+                                          cudaMemcpyDefault,
+                                          stream);
+        if (cpy != cudaSuccess) {
+            // Fallback to synchronous copy
+            cudaGetLastError();
+            // For sync fallback, copy from copy_src into target via a temporary
+            // if copy_src != iov_.base; otherwise reuse copy_iov_to_target.
+            if (copy_src == iov_.base) {
+                copy_iov_to_target(target, nbytes);
+            } else {
+                // Temporarily swap iov_.base view: use cudaMemcpy directly
+                cudaError_t cpy2 = cudaMemcpy(reinterpret_cast<void *>(target),
+                                              copy_src,
+                                              static_cast<size_t>(nbytes),
+                                              cudaMemcpyDefault);
+                if (cpy2 != cudaSuccess) {
+                    cudaGetLastError();
+                    memcpy(reinterpret_cast<void *>(target), copy_src,
+                           static_cast<size_t>(nbytes));
+                }
+            }
+        }
+    }
+
 public:
     ThreeFSReader(const std::string &mount_point,
                   int entries,
@@ -199,6 +241,18 @@ public:
             dbg("init OK  iov.base=%p iov.size=%lu (not pinned, cuda_err=%d)",
                 (void *)iov_.base, (unsigned long)iov_.size, (int)pin_err);
         }
+
+        // Initialize CUDA stream for async H2D copy
+        cudaError_t stream_err = cudaStreamCreateWithFlags(&copy_stream_,
+                                                           cudaStreamNonBlocking);
+        if (stream_err == cudaSuccess) {
+            stream_created_ = true;
+            dbg("init OK  created async copy stream");
+        } else {
+            cudaGetLastError();  // clear sticky error
+            dbg("init OK  could not create async copy stream, err=%d",
+                (int)stream_err);
+        }
     }
 
     ~ThreeFSReader() {
@@ -212,6 +266,13 @@ public:
             cudaGetLastError();  // clear any sticky error
         }
         if (iov_.iovh) hf3fs_iovdestroy(&iov_);
+
+        // Destroy CUDA stream
+        if (stream_created_) {
+            cudaStreamDestroy(copy_stream_);
+            cudaGetLastError();  // clear any sticky error
+            dbg("destroyed async copy stream");
+        }
     }
 
     // non-copyable
@@ -248,22 +309,41 @@ public:
 
     // ----- chunked read (GIL released) -------------------------------------
 
+    // Non-pipelined version (backward compatible)
     int64_t read_chunked(int fd, uintptr_t dev_ptr,
                          int64_t file_offset, int64_t total_length,
                          int64_t chunk_size) {
+        return read_chunked_pipelined(fd, dev_ptr, file_offset, total_length, chunk_size, false);
+    }
+
+    // Pipelined version with explicit pipelined flag
+    // When pipelined=true: uses double-buffering with async cudaMemcpyAsync
+    // to overlap I/O and H2D copy operations.
+    int64_t read_chunked_pipelined(int fd, uintptr_t dev_ptr,
+                                   int64_t file_offset, int64_t total_length,
+                                   int64_t chunk_size, bool pipelined) {
+        // Pipelined mode requires: CUDA stream available, dev_ptr != 0
+        bool use_pipeline = pipelined && stream_created_ && dev_ptr != 0;
+
         if (chunk_size <= 0)
             chunk_size = std::min(total_length, static_cast<int64_t>(buffer_size_));
+
+        // For pipelined mode, limit chunk size to half buffer for double-buffering
+        int64_t half_buf = static_cast<int64_t>(buffer_size_ / 2);
+        if (use_pipeline && chunk_size > half_buf) {
+            chunk_size = half_buf;
+        }
 
         int64_t bytes_done = 0;
         int64_t remaining  = total_length;
         int64_t cur_foff   = file_offset;
         int64_t cur_doff   = 0;
 
-        // --- per-call timing accumulators (active only when debug_enabled()) ---
-        // Each phase is accumulated across all chunks; a single summary line is
-        // printed after the loop so the log is never spammy.
+        // --- per-call timing accumulators ---
         const bool do_time = debug_enabled();
         double t_prep_submit = 0.0, t_wait = 0.0, t_copy = 0.0;
+        // Pipelined path uses separate counters for copy-wait vs copy-submit
+        double t_copy_wait = 0.0, t_copy_submit = 0.0;
         int    chunk_count   = 0;
         auto now_sec = []() -> double {
             struct timespec ts;
@@ -272,73 +352,181 @@ public:
         };
         double t_total_start = do_time ? now_sec() : 0.0;
 
-        while (remaining > 0) {
-            int64_t buf_limit = static_cast<int64_t>(buffer_size_);
-            int64_t this_chunk = std::min(remaining, std::min(chunk_size, buf_limit));
+        if (!use_pipeline) {
+            // --- Non-pipelined path (original logic) ---
+            while (remaining > 0) {
+                int64_t buf_limit = static_cast<int64_t>(buffer_size_);
+                int64_t this_chunk = std::min(remaining, std::min(chunk_size, buf_limit));
 
-            // --- phase 1: USRBIO prep + submit ----------------------------
-            double t0 = do_time ? now_sec() : 0.0;
+                double t0 = do_time ? now_sec() : 0.0;
 
-            int idx = hf3fs_prep_io(&ior_, &iov_, /*read=*/true,
-                                    iov_.base, fd, cur_foff, this_chunk,
-                                    nullptr);
-            if (idx < 0)
-                throw std::runtime_error("hf3fs_prep_io failed: " +
-                                         std::to_string(idx));
+                int idx = hf3fs_prep_io(&ior_, &iov_, /*read=*/true,
+                                        iov_.base, fd, cur_foff, this_chunk,
+                                        nullptr);
+                if (idx < 0)
+                    throw std::runtime_error("hf3fs_prep_io failed: " +
+                                             std::to_string(idx));
 
-            int sret = hf3fs_submit_ios(&ior_);
-            if (sret < 0)
-                throw std::runtime_error("hf3fs_submit_ios failed: " +
-                                         std::to_string(sret));
+                int sret = hf3fs_submit_ios(&ior_);
+                if (sret < 0)
+                    throw std::runtime_error("hf3fs_submit_ios failed: " +
+                                             std::to_string(sret));
 
-            if (do_time) t_prep_submit += now_sec() - t0;
+                if (do_time) t_prep_submit += now_sec() - t0;
 
-            // --- phase 2: USRBIO wait (3FS async I/O completion) ----------
-            double t1 = do_time ? now_sec() : 0.0;
+                double t1 = do_time ? now_sec() : 0.0;
 
-            struct hf3fs_cqe cqe;
-            int wret = hf3fs_wait_for_ios(&ior_, &cqe, 1, 1, nullptr);
-            if (wret < 0)
-                throw std::runtime_error("hf3fs_wait_for_ios failed: " +
-                                         std::to_string(wret));
+                struct hf3fs_cqe cqe;
+                int wret = hf3fs_wait_for_ios(&ior_, &cqe, 1, 1, nullptr);
+                if (wret < 0)
+                    throw std::runtime_error("hf3fs_wait_for_ios failed: " +
+                                             std::to_string(wret));
 
-            if (do_time) t_wait += now_sec() - t1;
+                if (do_time) t_wait += now_sec() - t1;
 
-            int64_t actual = cqe.result;
-            if (actual < 0)
-                throw std::runtime_error("I/O error: " +
-                                         std::to_string(actual));
-            if (actual == 0) break; // EOF
+                int64_t actual = cqe.result;
+                if (actual < 0)
+                    throw std::runtime_error("I/O error: " +
+                                             std::to_string(actual));
+                if (actual == 0) break;
 
-            // --- phase 3: copy IOV -> target (GPU or host) ----------------
-            // Guard against dev_ptr==0 (download-only mode): after the first
-            // chunk cur_doff > 0, so dev_ptr + cur_doff would be a non-zero
-            // but invalid address, causing memcpy to SIGSEGV.
-            double t2 = do_time ? now_sec() : 0.0;
+                double t2 = do_time ? now_sec() : 0.0;
 
-            if (dev_ptr != 0) {
                 copy_iov_to_target(dev_ptr + cur_doff, actual);
+
+                if (do_time) t_copy += now_sec() - t2;
+
+                bytes_done += actual;
+                cur_foff   += actual;
+                cur_doff   += actual;
+                remaining  -= actual;
+                ++chunk_count;
+
+                if (actual < this_chunk) break;
+            }
+        } else {
+            // --- Pipelined path (true double-buffered IO + async H2D copy) ---
+            //
+            // Buffer layout: [buf0: half_buf][buf1: half_buf]
+            //
+            // True overlap pattern (N = chunk index):
+            //   Chunk N  : IO → bufs[N%2]  (submit + wait)
+            //              while IO is in flight, previous cudaMemcpyAsync
+            //              for bufs[(N-1)%2] runs concurrently on copy_stream_
+            //   After IO : wait for bufs[(N-1)%2] copy to finish
+            //              then issue cudaMemcpyAsync for bufs[N%2]
+            //
+            // This ensures the H2D copy of chunk N-1 overlaps with the
+            // 3FS network I/O of chunk N.
+            char* bufs[2] = {
+                static_cast<char*>(iov_.base),
+                static_cast<char*>(iov_.base) + half_buf
+            };
+            int  cur_buf         = 0;   // index into bufs[] for current IO
+            bool has_pending_copy = false;
+
+            while (remaining > 0) {
+                int64_t this_chunk = std::min(remaining, chunk_size);
+                char*   io_buf     = bufs[cur_buf];
+
+                // --- Phase 1: Issue IO into io_buf (current buffer) -------
+                // We do NOT wait for the previous async copy here; it runs
+                // concurrently with the 3FS network I/O below.
+                double t0 = do_time ? now_sec() : 0.0;
+
+                int idx = hf3fs_prep_io(&ior_, &iov_, /*read=*/true,
+                                        io_buf, fd, cur_foff, this_chunk,
+                                        nullptr);
+                if (idx < 0)
+                    throw std::runtime_error("hf3fs_prep_io failed: " +
+                                             std::to_string(idx));
+
+                int sret = hf3fs_submit_ios(&ior_);
+                if (sret < 0)
+                    throw std::runtime_error("hf3fs_submit_ios failed: " +
+                                             std::to_string(sret));
+
+                if (do_time) t_prep_submit += now_sec() - t0;
+
+                // --- Phase 2: Wait for IO completion ----------------------
+                // During this wait the previous cudaMemcpyAsync (if any)
+                // runs concurrently on copy_stream_, achieving overlap.
+                double t1 = do_time ? now_sec() : 0.0;
+
+                struct hf3fs_cqe cqe;
+                int wret = hf3fs_wait_for_ios(&ior_, &cqe, 1, 1, nullptr);
+                if (wret < 0)
+                    throw std::runtime_error("hf3fs_wait_for_ios failed: " +
+                                             std::to_string(wret));
+
+                if (do_time) t_wait += now_sec() - t1;
+
+                int64_t actual = cqe.result;
+                if (actual < 0)
+                    throw std::runtime_error("I/O error: " +
+                                             std::to_string(actual));
+                if (actual == 0) break;
+
+                // --- Phase 3: Wait for previous async copy to finish ------
+                // Now that IO is done we must ensure the previous copy has
+                // completed before we issue the next one (single stream).
+                double t2 = do_time ? now_sec() : 0.0;
+
+                if (has_pending_copy) {
+                    cudaError_t sync_err = cudaStreamSynchronize(copy_stream_);
+                    if (sync_err != cudaSuccess)
+                        cudaGetLastError();  // clear; will still issue next copy
+                    has_pending_copy = false;
+                }
+
+                if (do_time) t_copy_wait += now_sec() - t2;
+
+                // --- Phase 4: Issue async H2D copy for io_buf → dev -------
+                double t3 = do_time ? now_sec() : 0.0;
+
+                copy_iov_to_target_async(dev_ptr + cur_doff, actual,
+                                         copy_stream_, io_buf);
+                has_pending_copy = true;
+
+                if (do_time) t_copy_submit += now_sec() - t3;
+
+                bytes_done += actual;
+                cur_foff   += actual;
+                cur_doff   += actual;
+                remaining  -= actual;
+                ++chunk_count;
+                cur_buf    ^= 1;  // alternate buffer for next iteration
+
+                if (actual < this_chunk) break;
             }
 
-            if (do_time) t_copy += now_sec() - t2;
-
-            bytes_done += actual;
-            cur_foff   += actual;
-            cur_doff   += actual;
-            remaining  -= actual;
-            ++chunk_count;
-
-            if (actual < this_chunk) break; // short read -> EOF
+            // Final sync: ensure the last async copy completes before returning.
+            if (has_pending_copy) {
+                double t_final = do_time ? now_sec() : 0.0;
+                cudaError_t sync_err = cudaStreamSynchronize(copy_stream_);
+                if (sync_err != cudaSuccess)
+                    cudaGetLastError();
+                if (do_time) t_copy_wait += now_sec() - t_final;
+            }
         }
 
-        // --- one-shot summary log (printed once per read_chunked call) ----
+        // --- one-shot summary log ---
         if (do_time) {
             double t_total = now_sec() - t_total_start;
-            dbg("read_chunked fd=%d total=%lld bytes chunks=%d"
-                " | prep+submit=%.2fms wait=%.2fms copy=%.2fms total=%.2fms",
-                fd, (long long)bytes_done, chunk_count,
-                t_prep_submit * 1e3, t_wait * 1e3,
-                t_copy * 1e3, t_total * 1e3);
+            if (use_pipeline) {
+                dbg("read_chunked fd=%d total=%lld bytes chunks=%d pipelined=1"
+                    " | prep+submit=%.2fms wait=%.2fms"
+                    " copy_wait=%.2fms copy_submit=%.2fms total=%.2fms",
+                    fd, (long long)bytes_done, chunk_count,
+                    t_prep_submit * 1e3, t_wait * 1e3,
+                    t_copy_wait * 1e3, t_copy_submit * 1e3, t_total * 1e3);
+            } else {
+                dbg("read_chunked fd=%d total=%lld bytes chunks=%d pipelined=0"
+                    " | prep+submit=%.2fms wait=%.2fms copy=%.2fms total=%.2fms",
+                    fd, (long long)bytes_done, chunk_count,
+                    t_prep_submit * 1e3, t_wait * 1e3,
+                    t_copy * 1e3, t_total * 1e3);
+            }
         }
 
         return bytes_done;
@@ -463,6 +651,13 @@ PYBIND11_MODULE(_core_v2, m) {
              py::arg("fd"), py::arg("dev_ptr"),
              py::arg("file_offset"), py::arg("total_length"),
              py::arg("chunk_size") = 0,
+             py::call_guard<py::gil_scoped_release>())
+
+        .def("read_chunked_pipelined", &ThreeFSReader::read_chunked_pipelined,
+             py::arg("fd"), py::arg("dev_ptr"),
+             py::arg("file_offset"), py::arg("total_length"),
+             py::arg("chunk_size") = 0,
+             py::arg("pipelined") = false,
              py::call_guard<py::gil_scoped_release>())
 
         .def("open_and_read_headers",

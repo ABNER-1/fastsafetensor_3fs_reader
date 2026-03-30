@@ -230,12 +230,22 @@ class ThreeFSFileReaderPy(FileReaderInterface):
         file_offset: int,
         total_length: int,
         chunk_size: int = 0,
+        pipelined: bool = False,
     ) -> int:
         """Read *total_length* bytes from *path* into memory at *dev_ptr*.
 
         Data is first read into a host staging buffer, then copied to the
         target address.  If *dev_ptr* points to CUDA device memory the copy
         is performed via cudaMemcpy for efficient host-to-device transfer.
+
+        Args:
+            path: File path to read from.
+            dev_ptr: Target memory address (GPU or host).
+            file_offset: Offset in file to start reading.
+            total_length: Total bytes to read.
+            chunk_size: Chunk size for I/O (0 = auto).
+            pipelined: If True, use pipelined I/O (not supported in Python
+                reader, will log a warning and fall back to non-pipelined).
 
         When the environment variable FASTSAFETENSORS_DEBUG is set, a
         one-shot timing summary is printed to stderr after each call,
@@ -247,6 +257,8 @@ class ThreeFSFileReaderPy(FileReaderInterface):
         iov_copy is only non-zero on the preadv (USRBIO) path where the
         IOV buffer must be copied into the staging bytearray.
         """
+        if pipelined:
+            logger.warning("pipelined mode not supported in Python reader, falling back to non-pipelined")
         import time as _time
 
         do_time = _debug_enabled()

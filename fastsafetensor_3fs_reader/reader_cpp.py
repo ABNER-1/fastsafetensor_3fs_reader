@@ -83,14 +83,26 @@ class ThreeFSFileReaderCpp(FileReaderInterface):
         file_offset: int,
         total_length: int,
         chunk_size: int = 0,
+        pipelined: bool = False,
     ) -> int:
         """Read file data into device (or host) memory.
 
         Reuses a cached fd from ``read_headers_batch`` when available,
         otherwise opens and registers a new one.
+
+        Args:
+            path: File path to read from.
+            dev_ptr: Target memory address (GPU or host).
+            file_offset: Offset in file to start reading.
+            total_length: Total bytes to read.
+            chunk_size: Chunk size for I/O (0 = auto).
+            pipelined: If True, use double-buffered pipelined I/O with async
+                H2D copy to overlap network I/O and GPU transfer.
+
+        Returns bytes actually read.
         """
         fd = self._get_or_open_fd(path)
-        return self._reader.read_chunked(fd, dev_ptr, file_offset, total_length, chunk_size)
+        return self._reader.read_chunked_pipelined(fd, dev_ptr, file_offset, total_length, chunk_size, pipelined)
 
     def read_headers_batch(
         self,
