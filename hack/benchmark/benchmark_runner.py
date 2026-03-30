@@ -165,6 +165,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--decouple-chunk-buffer",
+        action="store_true",
+        help=(
+            "Fully decouple buffer_size and chunk_size: test all cartesian "
+            "product combinations regardless of their relative sizes. "
+            "Overrides --no-equal-chunk-buffer."
+        ),
+    )
+    parser.add_argument(
         "--num-processes",
         type=_parse_int_list,
         default=[1, 2, 4, 8],
@@ -261,6 +270,7 @@ def generate_combinations(
     chunk_sizes_mb: List[float],
     num_processes_list: List[int],
     equal_only: bool = True,
+    decouple: bool = False,
 ) -> List[Dict[str, Any]]:
     """Generate all valid (backend, buffer_size, chunk_size, num_processes)
     combinations.
@@ -271,6 +281,10 @@ def generate_combinations(
 
     When *equal_only* is ``False``, all combinations where
     ``chunk_size <= buffer_size`` are included (full grid search).
+
+    When *decouple* is ``True``, buffer_size and chunk_size are fully
+    decoupled: all cartesian product combinations are tested regardless of
+    their relative sizes.  This overrides *equal_only*.
 
     For the ``mock`` backend, buffer_size and chunk_size are not meaningful,
     so only one representative combination per num_processes is generated.
@@ -292,9 +306,9 @@ def generate_combinations(
         else:
             for buf_mb in buffer_sizes_mb:
                 for chunk_mb in chunk_sizes_mb:
-                    if equal_only and chunk_mb != buf_mb:
+                    if not decouple and equal_only and chunk_mb != buf_mb:
                         continue  # only test chunk == buffer
-                    if not equal_only and chunk_mb > buf_mb:
+                    if not decouple and not equal_only and chunk_mb > buf_mb:
                         continue  # invalid: chunk cannot exceed buffer
                     for nprocs in num_processes_list:
                         combos.append(
@@ -379,12 +393,16 @@ def run_benchmark(args: argparse.Namespace) -> None:
     if benchmark_op in ("read_chunked", "both"):
         print(f"  Download only : {args.download_only}")
     print(f"  Output dir    : {args.output_dir}")
-    equal_only = not args.no_equal_chunk_buffer
+    decouple = getattr(args, "decouple_chunk_buffer", False)
+    equal_only = not args.no_equal_chunk_buffer and not decouple
     if benchmark_op in ("read_chunked", "both"):
-        print(
-            f"  Constraint    : "
-            f"{'chunk == buffer (equal mode)' if equal_only else 'chunk <= buffer (full grid)'}"
-        )
+        if decouple:
+            constraint_str = "decoupled (full cartesian product)"
+        elif equal_only:
+            constraint_str = "chunk == buffer (equal mode)"
+        else:
+            constraint_str = "chunk <= buffer (full grid)"
+        print(f"  Constraint    : {constraint_str}")
     print(f"{'#' * 90}\n")
 
     benchmark_start = time.time()
@@ -399,6 +417,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
             chunk_sizes_mb=args.chunk_sizes,
             num_processes_list=args.num_processes,
             equal_only=equal_only,
+            decouple=decouple,
         )
 
         if not combos:
