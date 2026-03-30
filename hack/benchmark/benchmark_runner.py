@@ -413,8 +413,8 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 chunk_mb = combo["chunk_size_mb"]
                 nprocs = combo["num_processes"]
 
-                buffer_size = buf_mb * 1024 * 1024 if buf_mb > 0 else 64 * 1024 * 1024
-                chunk_size = chunk_mb * 1024 * 1024 if chunk_mb > 0 else 64 * 1024 * 1024
+                buffer_size = int(buf_mb * 1024 * 1024) if buf_mb > 0 else 64 * 1024 * 1024
+                chunk_size = int(chunk_mb * 1024 * 1024) if chunk_mb > 0 else 64 * 1024 * 1024
 
                 progress = f"[{idx}/{len(combos)}]"
                 print(
