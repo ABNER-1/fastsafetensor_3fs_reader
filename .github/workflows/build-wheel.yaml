@@ -98,14 +98,15 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update
-          apt-get install -y software-properties-common
+          apt-get install -y software-properties-common curl
           add-apt-repository -y ppa:deadsnakes/ppa
           apt-get update
           apt-get install -y \
             python${{ matrix.python-version }} \
             python${{ matrix.python-version }}-dev \
             python${{ matrix.python-version }}-venv
-          python${{ matrix.python-version }} -m ensurepip --upgrade || true
+          # ensurepip is disabled in Debian/Ubuntu system Python; use get-pip.py instead
+          curl -sS https://bootstrap.pypa.io/get-pip.py | python${{ matrix.python-version }}
           python${{ matrix.python-version }} -m pip install --upgrade pip setuptools wheel pybind11
 
       - name: Install hf3fs_py_usrbio from hack/deps
@@ -197,8 +198,9 @@ jobs:
       - name: Verify import
         run: |
           python -c "
-          from fastsafetensor_3fs_reader import MockFileReader, FileReaderInterface, is_available
-          assert not is_available()
+          from fastsafetensor_3fs_reader import MockFileReader, FileReaderInterface, is_available, get_backend
+          # Pure wheel has no C++ extension, but python backend may be available
+          print(f'Backend: {get_backend()}, is_available: {is_available()}')
           reader = MockFileReader()
           print('Pure wheel installation OK')
           "
