@@ -9,8 +9,39 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      python_versions:
+        description: "Python versions to build (3.10 for testing, all for release)"
+        type: choice
+        options:
+          - "3.10"
+          - "all"
+        default: "3.10"
 
 jobs:
+  # ---------------------------------------------------------------
+  # Job 0: Resolve Python version matrix
+  # ---------------------------------------------------------------
+  resolve-matrix:
+    name: Resolve Python Version Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Determine Python versions
+        id: set-matrix
+        run: |
+          # Tag push → always build all versions
+          # workflow_dispatch → respect user choice
+          # pull_request → default to single version for fast CI
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo 'matrix=["3.9","3.10","3.11","3.12","3.13"]' >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.python_versions }}" == "all" ]]; then
+            echo 'matrix=["3.9","3.10","3.11","3.12","3.13"]' >> $GITHUB_OUTPUT
+          else
+            echo 'matrix=["3.10"]' >> $GITHUB_OUTPUT
+          fi
+
   # ---------------------------------------------------------------
   # Job 1: Build pure Python wheel (no C++ extension)
   # ---------------------------------------------------------------
@@ -52,13 +83,14 @@ jobs:
   # ---------------------------------------------------------------
   build-platform-wheel:
     name: Build Platform Wheel (Python ${{ matrix.python-version }})
+    needs: resolve-matrix
     runs-on: ubuntu-latest
     container:
       image: nvidia/cuda:12.4.1-devel-ubuntu22.04
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -69,15 +101,58 @@ jobs:
           apt-get install -y software-properties-common
           add-apt-repository -y ppa:deadsnakes/ppa
           apt-get update
-          apt-get install -y python${{ matrix.python-version }} python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
+          apt-get install -y \
+            python${{ matrix.python-version }} \
+            python${{ matrix.python-version }}-dev \
+            python${{ matrix.python-version }}-venv
           python${{ matrix.python-version }} -m ensurepip --upgrade || true
           python${{ matrix.python-version }} -m pip install --upgrade pip setuptools wheel pybind11
+
+      - name: Install hf3fs_py_usrbio from hack/deps
+        run: |
+          # Derive cpython tag (e.g. "3.10" → "cp310")
+          PYTHON_TAG="cp$(echo '${{ matrix.python-version }}' | tr -d '.')"
+          echo "Looking for wheel matching: hf3fs_py_usrbio-*-${PYTHON_TAG}-*.whl"
+          python${{ matrix.python-version }} -m pip install hack/deps/hf3fs_py_usrbio-*-${PYTHON_TAG}-*-linux_x86_64.whl
+
+      - name: Locate libhf3fs_api_shared.so and export HF3FS_LIB_DIR
+        run: |
+          HF3FS_LIB_DIR=$(python${{ matrix.python-version }} -c "
+          import importlib.util, pathlib, sys
+          spec = importlib.util.find_spec('hf3fs_py_usrbio')
+          if spec is None or spec.origin is None:
+              print('ERROR: hf3fs_py_usrbio not found', file=sys.stderr)
+              sys.exit(1)
+          origin = pathlib.Path(spec.origin)
+          # Single-file .so in site-packages
+          if origin.suffix != '.py':
+              site_pkgs = origin.parent
+          else:
+              site_pkgs = origin.parent.parent
+          # auditwheel convention: .libs directory
+          libs_dir = site_pkgs / 'hf3fs_py_usrbio.libs'
+          if libs_dir.is_dir():
+              print(libs_dir)
+          else:
+              # Fallback: search for the .so in site-packages
+              found = list(site_pkgs.glob('libhf3fs_api_shared.so*'))
+              if found:
+                  print(found[0].parent)
+              else:
+                  print(site_pkgs)
+          ")
+          echo "HF3FS_LIB_DIR=${HF3FS_LIB_DIR}"
+          echo "HF3FS_LIB_DIR=${HF3FS_LIB_DIR}" >> $GITHUB_ENV
+
+          # Verify the .so is actually there
+          ls -la "${HF3FS_LIB_DIR}"/libhf3fs_api_shared.so* || echo "WARNING: libhf3fs_api_shared.so not found in ${HF3FS_LIB_DIR}"
 
       - name: Build platform wheel
         run: |
           python${{ matrix.python-version }} setup.py bdist_wheel
         env:
           CUDA_HOME: /usr/local/cuda
+          HF3FS_LIB_DIR: ${{ env.HF3FS_LIB_DIR }}
 
       - name: List artifacts
         run: ls -la dist/
@@ -93,12 +168,12 @@ jobs:
   # ---------------------------------------------------------------
   test-pure-wheel:
     name: Test Pure Wheel (Python ${{ matrix.python-version }})
-    needs: build-pure-wheel
+    needs: [resolve-matrix, build-pure-wheel]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +192,7 @@ jobs:
       - name: Install wheel
         run: |
           pip install dist/fastsafetensor_3fs_reader-*-py3-none-any.whl
-          pip install pytest
+          pip install pytest numpy
 
       - name: Verify import
         run: |
@@ -130,14 +205,14 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/test_mock_reader.py tests/test_interface.py -v
+          pytest tests/test_mock.py -v
 
   # ---------------------------------------------------------------
   # Job 4: Publish to PyPI (only on tag push)
   # ---------------------------------------------------------------
   publish:
     name: Publish to PyPI
-    needs: [build-pure-wheel, test-pure-wheel]
+    needs: [build-pure-wheel, build-platform-wheel, test-pure-wheel]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
