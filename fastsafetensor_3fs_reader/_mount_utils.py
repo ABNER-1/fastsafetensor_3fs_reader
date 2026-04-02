@@ -7,11 +7,8 @@ try:
     from hf3fs_py_usrbio import extract_mount_point
 
 except ImportError:
-    # hf3fs_py_usrbio is not installed (mock / pure-Python fallback path).
-    # Provide a no-op stub so that callers can import extract_mount_point
-    # unconditionally without try/except.
+    # No-op stub when hf3fs_py_usrbio is not installed.
     def extract_mount_point(path: str) -> str:  # type: ignore[misc]
-        """Stub: hf3fs_py_usrbio is not installed; always returns ``""``."""
         return ""
 
 

@@ -1,49 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-C++ backed ThreeFSFileReader using the ``_core_v2`` pybind11 extension.
-
-This module provides ``ThreeFSFileReaderCpp``, a thin Python wrapper around
-the C++ ``_core_v2.ThreeFSReader`` class.  The C++ extension dynamically links
-``libhf3fs_api_shared.so`` at runtime and uses PyTorch's C++ API (libtorch)
-for GPU memory transfer.
-
-Compared to the pure-Python reader (``reader_py.py``), this version:
-
-* Releases the GIL during all blocking I/O operations.
-* Uses 3FS USRBIO async I/O (prepare → submit → wait) natively in C++.
-* Performs host → GPU copies via ``cudaMemcpy`` in C++ (no Python overhead).
-"""
+"""C++ backed ThreeFSFileReader using the ``_core_v2`` pybind11 extension."""
 
 from __future__ import annotations
 
 import os
 
-# Import the C++ extension module
 from .cpp import _core_v2  # type: ignore[attr-defined]
 from .interface import FileReaderInterface
 
-
 def check_library() -> bool:
-    """Return *True* if the C++ ``_core_v2`` extension is available."""
     try:
         return _core_v2.check_library()
     except Exception:
         return False
 
-
 class ThreeFSFileReaderCpp(FileReaderInterface):
-    """High-performance 3FS USRBIO file reader (C++ backend).
-
-    This reader uses the ``_core_v2`` pybind11 extension which dynamically
-    links ``libhf3fs_api_shared.so``.  All I/O operations release the GIL.
-
-    Args:
-        mount_point: 3FS FUSE mount-point path (e.g. ``/mnt/3fs``).
-        entries: Maximum concurrent I/O requests.
-        io_depth: I/O depth hint (0 = default).
-        buffer_size: IOV shared-memory buffer size in bytes.
-    """
+    """High-performance 3FS USRBIO file reader (C++ backend)."""
 
     def __init__(
         self,
@@ -85,22 +58,6 @@ class ThreeFSFileReaderCpp(FileReaderInterface):
         chunk_size: int = 0,
         pipelined: bool = False,
     ) -> int:
-        """Read file data into device (or host) memory.
-
-        Reuses a cached fd from ``read_headers_batch`` when available,
-        otherwise opens and registers a new one.
-
-        Args:
-            path: File path to read from.
-            dev_ptr: Target memory address (GPU or host).
-            file_offset: Offset in file to start reading.
-            total_length: Total bytes to read.
-            chunk_size: Chunk size for I/O (0 = auto).
-            pipelined: If True, use double-buffered pipelined I/O with async
-                H2D copy to overlap network I/O and GPU transfer.
-
-        Returns bytes actually read.
-        """
         fd = self._get_or_open_fd(path)
         return self._reader.read_chunked_pipelined(fd, dev_ptr, file_offset, total_length, chunk_size, pipelined)
 
@@ -109,9 +66,7 @@ class ThreeFSFileReaderCpp(FileReaderInterface):
         paths: list[str],
         num_threads: int = 8,
     ) -> dict[str, tuple[str, int, int]]:
-        """Read SafeTensors headers in parallel via the C++ thread pool.
-
-        Fds are registered and cached in C++; ``read_chunked`` can reuse
+        """Fds are registered and cached in C++; ``read_chunked`` can reuse
         them directly.
         """
         if not paths:
@@ -132,18 +87,15 @@ class ThreeFSFileReaderCpp(FileReaderInterface):
         return results
 
     def close(self) -> None:
-        """Close all resources including cached fds."""
         self._reader.close_all()
         self._fd_map.clear()
 
     def has_fd(self, path: str) -> bool:
-        """Check whether *path* has a cached file descriptor."""
         return path in self._fd_map
 
     # -- internal helpers ----------------------------------------------------
 
     def _get_or_open_fd(self, path: str) -> int:
-        """Get cached fd or open + register a new one."""
         if path in self._fd_map:
             return self._fd_map[path]
         fd = self._reader.open(path, os.O_RDONLY)

@@ -12,10 +12,7 @@ class MockFileReader(FileReaderInterface):
     """Local filesystem-backed mock for CI tests. No 3FS/CUDA/C++ required."""
 
     def __init__(self, mount_point: str = "", **kwargs) -> None:
-        # Accept and ignore extra keyword arguments (entries, io_depth,
-        # buffer_size, etc.) so that MockFileReader can be used as a
-        # drop-in replacement for ThreeFSFileReaderCpp / Py without
-        # the caller having to strip backend-specific parameters.
+        # Extra kwargs accepted for drop-in replacement compatibility.
         self._fd_map: dict[str, int] = {}
         self._mount_point = mount_point
 
@@ -34,8 +31,7 @@ class MockFileReader(FileReaderInterface):
         data = os.pread(fd, total_length, file_offset)
 
         if dev_ptr != 0:
-            # Use _copy_host_to_target instead of ctypes.memmove so that GPU
-            # pointers (cudaMemcpyDefault) are handled safely without SIGSEGV.
+            # Safe for both GPU and host pointers (avoids SIGSEGV on GPU ptrs).
             staging_buf = bytearray(data)
             staging_ptr = ctypes.addressof(
                 (ctypes.c_char * len(staging_buf)).from_buffer(staging_buf)

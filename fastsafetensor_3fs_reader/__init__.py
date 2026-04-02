@@ -11,45 +11,31 @@ Quick start::
         headers = reader.read_headers_batch(["/mnt/3fs/model.safetensors"])
         reader.close()
 
-Backends (auto-selected at import time: cpp -> python -> mock)::
+Backend auto-selection (override via ``FASTSAFETENSORS_BACKEND``)::
 
-    FASTSAFETENSORS_BACKEND=cpp|python|mock|auto
-
-Library auto-discovery:
-    ``libhf3fs_api_shared.so`` is auto-discovered from ``hf3fs_py_usrbio``'s
-    pip install path.  Override with ``HF3FS_LIB_DIR`` or ``LD_LIBRARY_PATH``.
+    cpp -> python -> mock
 """
 
-# ---------------------------------------------------------------------------
-# 1. Pre-load libhf3fs_api_shared.so (must run before any backend import)
-# ---------------------------------------------------------------------------
 from ._lib_preload import get_hf3fs_lib_path, preload_hf3fs_library
 
-preload_hf3fs_library()
+preload_hf3fs_library()  # must run before any backend import
 
-# ---------------------------------------------------------------------------
-# 2. Core type imports
-# ---------------------------------------------------------------------------
 from ._mount_utils import extract_mount_point
 from .interface import FileReaderInterface
 from .mock import MockFileReader
 
-# ---------------------------------------------------------------------------
-# 3. Backend initialization (cpp -> python -> mock)
-# ---------------------------------------------------------------------------
 from ._backend import (  # noqa: E402
-    ThreeFSFileReader,
     create_reader,
     get_backend,
     init_backend,
     is_available,
 )
 
+# init_backend() must run BEFORE importing ThreeFSFileReader: Python's
+# ``from mod import name`` captures the value at import time.
 init_backend()
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+from ._backend import ThreeFSFileReader  # noqa: E402
 
 __all__ = [
     "FileReaderInterface",
