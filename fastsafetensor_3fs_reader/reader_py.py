@@ -60,7 +60,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
         mount_point: str,
         entries: int = 128,
         io_depth: int = 0,
-        buffer_size: int = 64 * 1024 * 1024,  # 64 MiB
+        buffer_size: int = 1024 * 1024 * 1024,  # 64 MiB
         **kwargs,  # absorb legacy mount_name/token kwargs silently
     ) -> None:
         self._mount_point = mount_point

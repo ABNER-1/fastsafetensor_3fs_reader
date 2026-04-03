@@ -56,7 +56,7 @@ class ThreeFSFileReaderCpp(FileReaderInterface):
         file_offset: int,
         total_length: int,
         chunk_size: int = 0,
-        pipelined: bool = False,
+        pipelined: bool = True,
     ) -> int:
         fd = self._get_or_open_fd(path)
         return self._reader.read_chunked_pipelined(fd, dev_ptr, file_offset, total_length, chunk_size, pipelined)

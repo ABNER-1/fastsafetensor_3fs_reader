@@ -168,14 +168,25 @@ python hack/benchmark/benchmark_runner.py \
 
 ### Performance Results
 
-<!-- TODO: Add benchmark results here -->
+> **Test environment:** Single 400 Gbps RDMA NIC.
+> These numbers represent a **loading baseline** under specific storage and
+> network hardware conditions — they do **not** represent the performance
+> ceiling of the system.
 
-> Results will be updated with real benchmark data.
+**Model:** DeepSeek-V3 (total ~640 GB safetensors)
 
-| Configuration | Throughput (GB/s) | Latency (ms) | Notes |
-|---------------|-------------------|--------------|-------|
-| TBD           | TBD               | TBD          | TBD   |
+| Configuration | Avg Throughput (GB/s) | Peak Throughput with fastsafetensors (GB/s) | Load Time (s) | Backend |
+|---|---|---|---|---|
+| 8 processes, buffer=8 MB | 35.0 | 32.0 | 30.34 | C++ (non-pipelined) |
+| 8 processes, buffer=16 MB | 37.6 | 36.6 | 25.73 | C++ (pipelined) |
 
+#### Benchmark: RDMA throughput across buffer sizes (8M / 16M / 32M)
+
+![RDMA throughput across buffer sizes](docs/images/cpp_performance.png)
+
+#### Production: model weight loading with fastsafetensors (pipelined, peak 36.6 GB/s)
+
+![Model weight loading throughput](docs/images/cpp_load.png)
 ## License
 
 Apache-2.0

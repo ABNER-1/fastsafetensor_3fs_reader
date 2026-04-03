@@ -408,7 +408,14 @@ public:
 
                 double t2 = do_time ? now_sec() : 0.0;
 
-                copy_iov_to_target(dev_ptr + cur_doff, actual);
+                // When dev_ptr == 0 (download-only mode), skip the copy —
+                // data is already in the IOV buffer and there is no valid
+                // target address to copy to.  Without this guard, target
+                // becomes cur_doff (a small integer), and cudaMemcpy hangs
+                // inside the CUDA driver trying to access an invalid address.
+                if (dev_ptr != 0) {
+                    copy_iov_to_target(dev_ptr + cur_doff, actual);
+                }
 
                 if (do_time) t_copy += now_sec() - t2;
 
@@ -673,7 +680,7 @@ PYBIND11_MODULE(_core_v2, m) {
              py::arg("fd"), py::arg("dev_ptr"),
              py::arg("file_offset"), py::arg("total_length"),
              py::arg("chunk_size") = 0,
-             py::arg("pipelined") = false,
+             py::arg("pipelined") = true,
              py::call_guard<py::gil_scoped_release>())
 
         .def("open_and_read_headers",
