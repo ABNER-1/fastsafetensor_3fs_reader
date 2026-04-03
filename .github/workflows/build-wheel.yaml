@@ -96,18 +96,28 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update
-          apt-get install -y software-properties-common curl
-          add-apt-repository -y ppa:deadsnakes/ppa
-          apt-get update
-          apt-get install -y \
-            python${{ matrix.python-version }} \
-            python${{ matrix.python-version }}-dev \
-            python${{ matrix.python-version }}-venv
+          apt-get update -qq
+          apt-get install -y --no-install-recommends software-properties-common curl ca-certificates
+
+          # Python 3.10 is the system default on Ubuntu 22.04; others need deadsnakes PPA
+          PY_VER="${{ matrix.python-version }}"
+          if ! apt-cache show "python${PY_VER}" 2>/dev/null | grep -q "^Package:"; then
+            # Add deadsnakes PPA with a 60s timeout guard
+            timeout 60 add-apt-repository -y --no-update ppa:deadsnakes/ppa || true
+            apt-get update -qq
+          fi
+
+          apt-get install -y --no-install-recommends \
+            python${PY_VER} \
+            python${PY_VER}-dev \
+            python${PY_VER}-venv
+
           # ensurepip is disabled in Debian/Ubuntu system Python; use get-pip.py instead
-          curl -sS https://bootstrap.pypa.io/get-pip.py | python${{ matrix.python-version }}
-          python${{ matrix.python-version }} -m pip install --upgrade pip setuptools wheel pybind11
+          curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER}
+          python${PY_VER} -m pip install --upgrade pip setuptools wheel pybind11
 
       - name: Install hf3fs_py_usrbio from hack/deps
         run: |

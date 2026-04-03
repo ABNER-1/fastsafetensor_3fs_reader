@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import json
 import os
 import struct
+from typing import Optional
 
 import pytest
 
