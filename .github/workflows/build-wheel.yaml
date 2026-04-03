@@ -172,7 +172,7 @@ jobs:
       - name: Repair wheel for manylinux compatibility
         run: |
           python${{ matrix.python-version }} -m auditwheel repair \
-            --plat manylinux_2_17_x86_64 \
+            --plat manylinux_2_35_x86_64 \
             --exclude libhf3fs_api_shared.so \
             --exclude libcudart.so \
             -w dist/repaired/ \
