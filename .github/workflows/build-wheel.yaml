@@ -119,6 +119,10 @@ jobs:
           curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER}
           python${PY_VER} -m pip install --upgrade pip setuptools wheel pybind11
 
+          # auditwheel + patchelf for manylinux tag conversion
+          python${PY_VER} -m pip install auditwheel
+          apt-get install -y --no-install-recommends patchelf
+
       - name: Install hf3fs_py_usrbio from hack/deps
         run: |
           # Derive cpython tag (e.g. "3.10" → "cp310")
@@ -164,6 +168,19 @@ jobs:
         env:
           CUDA_HOME: /usr/local/cuda
           HF3FS_LIB_DIR: ${{ env.HF3FS_LIB_DIR }}
+
+      - name: Repair wheel for manylinux compatibility
+        run: |
+          python${{ matrix.python-version }} -m auditwheel repair \
+            --plat manylinux_2_17_x86_64 \
+            --exclude libhf3fs_api_shared.so \
+            --exclude libcudart.so \
+            -w dist/repaired/ \
+            dist/*.whl
+          # Replace original wheel with repaired one
+          rm dist/*.whl
+          mv dist/repaired/*.whl dist/
+          rm -rf dist/repaired/
 
       - name: List artifacts
         run: ls -la dist/
