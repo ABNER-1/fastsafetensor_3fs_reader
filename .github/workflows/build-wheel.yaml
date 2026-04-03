@@ -59,7 +59,7 @@ jobs:
 
       - name: Install build tools
         run: |
-          python -m pip install --upgrade pip setuptools wheel pybind11
+          python -m pip install --upgrade pip setuptools wheel pybind11 build
 
       - name: Build pure Python wheel
         run: |
@@ -67,7 +67,7 @@ jobs:
 
       - name: Build sdist
         run: |
-          python setup.py sdist
+          python -m build --sdist
 
       - name: List artifacts
         run: ls -la dist/
@@ -251,3 +251,4 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          verbose: true
