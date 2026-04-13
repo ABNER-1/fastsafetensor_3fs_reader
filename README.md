@@ -33,38 +33,34 @@ This project implements the `FileReaderInterface` that fastsafetensors expects f
 ```mermaid
 graph TB
     FW["SGLang / vLLM<br/>Inference Framework"]
-    P1["Stage 1: File to Device<br/>read_headers_batch() + read_chunked()"]
-    P2["Stage 2: Tensor Broadcasting<br/>Collective communication (NVLink)"]
-    CPP["C++ Backend<br/>GIL-free, pipelined async H2D"]
-    PY["Python Backend<br/>USRBIO Client API, threaded"]
-    MOCK["Mock Backend<br/>Local filesystem, for testing"]
-    SDK["USRBIO SDK<br/>hf3fs_py_usrbio / libhf3fs_api_shared.so"]
-    CLUSTER["3FS Cluster<br/>RDMA network, distributed storage"]
 
     FW -->|"load model weights"| P1
-    P1 -->|"tensors ready"| P2
-    P1 -->|"FileReaderInterface"| CPP
+
+    subgraph fastsafetensors["fastsafetensors"]
+        P1["Stage 1: File → Device<br/>read_headers_batch() + read_chunked()"]
+    end
+
+    P1 --> CPP
     P1 -->|"FileReaderInterface"| PY
-    P1 -->|"FileReaderInterface"| MOCK
-    CPP --> SDK
-    PY --> SDK
+    P1 --> MOCK
+
+    subgraph reader["fastsafetensor-3fs-reader ⬅ this project"]
+        CPP["C++ Backend<br/>GIL-free, pipelined async H2D"]
+        PY["Python Backend<br/>USRBIO Client API, threaded"]
+        MOCK["Mock Backend<br/>Local filesystem, for testing"]
+    end
+
+    CPP -->|"USRBIO"| SDK
+    PY -->|"USRBIO"| SDK
+
+    subgraph storage["3FS Storage"]
+        SDK["USRBIO SDK<br/>hf3fs_py_usrbio / libhf3fs_api_shared.so"]
+        CLUSTER["3FS Cluster<br/>RDMA network, distributed storage"]
+    end
+
     SDK -->|"RDMA read"| CLUSTER
 
-    subgraph fastsafetensors
-        P1
-        P2
-    end
-
-    subgraph fastsafetensor-3fs-reader
-        CPP
-        PY
-        MOCK
-    end
-
-    subgraph 3FS-Storage
-        SDK
-        CLUSTER
-    end
+    P1 -.->|"tensors ready"| P2["Stage 2: Tensor Broadcasting<br/>Collective comm (NVLink)"]
 
     style FW fill:#4a90d9,color:#fff
     style P1 fill:#f5a623,color:#fff
@@ -74,6 +70,47 @@ graph TB
     style MOCK fill:#9b9b9b,color:#fff
     style SDK fill:#bd10e0,color:#fff
     style CLUSTER fill:#bd10e0,color:#fff
+```
+
+### Extra Memory Overhead
+
+The diagram below illustrates the extra memory overhead introduced by the two-stage loading scheme. Each rank allocates a **CUDA pinned memory** staging buffer whose size equals the `buffer_size` parameter passed when initializing `FileReaderInterface` (e.g. 16 MB), and each GPU reserves **device memory ≈ file size** for the current batch. After Stage 1 loads data into each GPU, **NCCL Broadcast** replicates the full tensors across all GPUs.
+
+```mermaid
+graph TB
+    FS["3FS Storage Cluster<br/>RDMA distributed storage"]
+
+    FS -->|"USRBIO read"| R1
+    FS -->|"USRBIO read"| R2
+    FS -->|"USRBIO read"| R3
+
+    subgraph host["Host Memory (Extra Overhead)"]
+        R1["Rank 1<br/>pinned memory = buffer_size (e.g. 16M)"]
+        R2["Rank 2<br/>pinned memory = buffer_size (e.g. 16M)"]
+        R3["Rank 3<br/>pinned memory = buffer_size (e.g. 16M)"]
+    end
+
+    R1 -->|"cudaMemcpy H2D"| G1
+    R2 -->|"cudaMemcpy H2D"| G2
+    R3 -->|"cudaMemcpy H2D"| G3
+
+    subgraph gpu["Device Memory (Extra Overhead)"]
+        G1["GPU 1<br/>batch buffer ≈ file size"]
+        G2["GPU 2<br/>batch buffer ≈ file size"]
+        G3["GPU 3<br/>batch buffer ≈ file size"]
+    end
+
+    G1 <-.->|"NCCL Broadcast"| G2
+    G2 <-.->|"NCCL Broadcast"| G3
+    G1 <-.->|"NCCL Broadcast"| G3
+
+    style FS fill:#bd10e0,color:#fff
+    style R1 fill:#7ed321,color:#fff
+    style R2 fill:#7ed321,color:#fff
+    style R3 fill:#7ed321,color:#fff
+    style G1 fill:#f5a623,color:#fff
+    style G2 fill:#f5a623,color:#fff
+    style G3 fill:#f5a623,color:#fff
 ```
 
 ## Backends
