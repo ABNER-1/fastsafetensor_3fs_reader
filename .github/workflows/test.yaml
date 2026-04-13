@@ -27,7 +27,7 @@ jobs:
 
       - name: Install package (pure Python mode)
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel pybind11
           FST3FS_NO_EXT=1 pip install ".[test]" --no-build-isolation
 
       - name: Verify import
