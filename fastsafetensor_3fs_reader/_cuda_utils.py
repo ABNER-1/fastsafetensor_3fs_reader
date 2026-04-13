@@ -7,6 +7,7 @@ import ctypes.util
 
 _cudart_lib = None
 
+
 class _CudaPointerAttributes(ctypes.Structure):
     _fields_ = [
         ("type", ctypes.c_int),
@@ -14,6 +15,7 @@ class _CudaPointerAttributes(ctypes.Structure):
         ("devicePointer", ctypes.c_void_p),
         ("hostPointer", ctypes.c_void_p),
     ]
+
 
 def _load_cudart():
     global _cudart_lib
@@ -36,6 +38,7 @@ def _load_cudart():
             pass
 
     return None
+
 
 def _get_cuda_ptr_type(ptr: int) -> str:
     """Return the CUDA memory type of *ptr*.
@@ -65,9 +68,11 @@ def _get_cuda_ptr_type(ptr: int) -> str:
         pass
     return "unknown"
 
+
 def _is_cuda_ptr(ptr: int) -> bool:
     """Kept for backward compatibility; prefer ``_get_cuda_ptr_type``."""
     return _get_cuda_ptr_type(ptr) == "device"
+
 
 def _cuda_memcpy(dst: int, src: int, nbytes: int, kind: int = 1) -> None:
     """Call ``cudaMemcpy`` via ctypes.
@@ -94,9 +99,11 @@ def _cuda_memcpy(dst: int, src: int, nbytes: int, kind: int = 1) -> None:
     if err != 0:
         raise RuntimeError(f"cudaMemcpy failed with CUDA error code {err}")
 
+
 _cudaMemcpy_fn = None
 _cudaHostRegister_fn = None
 _cudaHostUnregister_fn = None
+
 
 def _get_fast_cudaMemcpy():
     """Return a cached ctypes function pointer for ``cudaMemcpy``."""
@@ -115,6 +122,7 @@ def _get_fast_cudaMemcpy():
             _cudaMemcpy_fn = fn
     return _cudaMemcpy_fn
 
+
 def _fast_cuda_memcpy(dst: int, src: int, nbytes: int, kind: int = 4) -> None:
     """Call ``cudaMemcpy`` using a cached function pointer.
 
@@ -131,6 +139,7 @@ def _fast_cuda_memcpy(dst: int, src: int, nbytes: int, kind: int = 4) -> None:
     err = fn(dst, src, nbytes, kind)
     if err != 0:
         raise RuntimeError(f"cudaMemcpy failed with CUDA error code {err}")
+
 
 def _cuda_host_register(ptr: int, size: int) -> bool:
     """Register a host memory region as CUDA pinned memory.
@@ -153,6 +162,7 @@ def _cuda_host_register(ptr: int, size: int) -> bool:
     except Exception:
         return False
 
+
 def _cuda_host_unregister(ptr: int) -> None:
     """Unregister a previously pinned host memory region.
 
@@ -170,6 +180,7 @@ def _cuda_host_unregister(ptr: int) -> None:
         lib.cudaGetLastError()
     except Exception:
         pass
+
 
 def _copy_host_to_target(
     staging_buf: bytearray,
@@ -198,6 +209,7 @@ def _copy_host_to_target(
         except (RuntimeError, OSError):
             pass
         ctypes.memmove(target_ptr, staging_ptr, nbytes)
+
 
 def _copy_target_to_host(
     src_ptr: int,

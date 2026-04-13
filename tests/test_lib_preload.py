@@ -187,9 +187,7 @@ class TestFindInPipPackages:
 
     def test_handles_module_not_found_error(self):
         """Gracefully handles ModuleNotFoundError from find_spec."""
-        with mock.patch(
-            "importlib.util.find_spec", side_effect=ModuleNotFoundError("no module")
-        ):
+        with mock.patch("importlib.util.find_spec", side_effect=ModuleNotFoundError("no module")):
             assert _lib_preload._find_in_pip_packages() is None
 
 
@@ -258,9 +256,7 @@ class TestPreloadHf3fsLibrary:
         pip_so = str(tmp_path / "fake.so")
         Path(pip_so).touch()
 
-        with mock.patch.object(
-            _lib_preload, "_find_in_pip_packages", return_value=pip_so
-        ):
+        with mock.patch.object(_lib_preload, "_find_in_pip_packages", return_value=pip_so):
             with mock.patch("ctypes.CDLL") as mock_cdll:
                 result = _lib_preload.preload_hf3fs_library()
                 assert result is True

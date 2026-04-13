@@ -16,6 +16,7 @@ def check_library() -> bool:
     except Exception:
         return False
 
+
 class ThreeFSFileReaderCpp(FileReaderInterface):
     """High-performance 3FS USRBIO file reader (C++ backend)."""
 
@@ -60,7 +61,9 @@ class ThreeFSFileReaderCpp(FileReaderInterface):
         pipelined: bool = True,
     ) -> int:
         fd = self._get_or_open_fd(path)
-        return self._reader.read_chunked_pipelined(fd, dev_ptr, file_offset, total_length, chunk_size, pipelined)
+        return self._reader.read_chunked_pipelined(
+            fd, dev_ptr, file_offset, total_length, chunk_size, pipelined
+        )
 
     def read_headers_batch(
         self,

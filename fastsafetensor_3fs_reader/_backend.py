@@ -60,9 +60,7 @@ def init_backend() -> None:
         for candidate in ("cpp", "python"):
             try:
                 _load_backend(candidate)
-                logger.info(
-                    "using backend=%r (auto-selected)", _BACKEND
-                )
+                logger.info("using backend=%r (auto-selected)", _BACKEND)
                 break
             except ImportError as exc:
                 logger.debug(

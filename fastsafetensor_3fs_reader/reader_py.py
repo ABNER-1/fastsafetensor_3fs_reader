@@ -172,7 +172,9 @@ class ThreeFSFileReaderPy(FileReaderInterface):
     ) -> int:
 
         if pipelined:
-            logger.warning("pipelined mode not supported in Python reader, falling back to non-pipelined")
+            logger.warning(
+                "pipelined mode not supported in Python reader, falling back to non-pipelined"
+            )
         import time as _time
 
         do_time = _debug_enabled()
@@ -599,5 +601,3 @@ class ThreeFSFileReaderPy(FileReaderInterface):
             local_buf = bytearray(self._shm.buf[iov_offset : iov_offset + nbytes])
             local_ptr = ctypes.addressof((ctypes.c_char * nbytes).from_buffer(local_buf))
             _copy_host_to_target(local_buf, local_ptr, target_ptr, nbytes)
-
-

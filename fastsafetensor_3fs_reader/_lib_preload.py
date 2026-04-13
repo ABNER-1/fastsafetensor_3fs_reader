@@ -40,6 +40,7 @@ def _glob_lib(directory: Path) -> str | None:
 # Discovery helpers
 # ---------------------------------------------------------------------------
 
+
 def _find_in_env_var() -> str | None:
     lib_dir = os.environ.get("HF3FS_LIB_DIR")
     if not lib_dir:
@@ -93,7 +94,7 @@ def _find_in_pip_packages() -> str | None:
         site_packages = origin.parent
 
     candidates = [
-        site_packages / "hf3fs_py_usrbio.libs",   # auditwheel convention
+        site_packages / "hf3fs_py_usrbio.libs",  # auditwheel convention
         site_packages,
     ]
     if pkg_dir is not None:
@@ -110,6 +111,7 @@ def _find_in_pip_packages() -> str | None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def preload_hf3fs_library() -> bool:
     """Discover and pre-load ``libhf3fs_api_shared.so`` with ``RTLD_GLOBAL``.
@@ -131,9 +133,7 @@ def preload_hf3fs_library() -> bool:
         if path:
             return _do_preload(path, source=source)
 
-    logger.debug(
-        "preload_hf3fs_library: %s not found in any search path", _LIB_NAME
-    )
+    logger.debug("preload_hf3fs_library: %s not found in any search path", _LIB_NAME)
     return False
 
 
@@ -144,6 +144,7 @@ def get_hf3fs_lib_path() -> str | None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _do_preload(path: str, *, source: str) -> bool:
     global _preloaded_path
