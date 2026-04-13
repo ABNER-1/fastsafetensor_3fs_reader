@@ -32,37 +32,39 @@ This project implements the `FileReaderInterface` that fastsafetensors expects f
 
 ```mermaid
 graph TB
-    subgraph Inference["Inference Framework"]
-        FW["SGLang / vLLM<br/>Model serving framework"]
-    end
-
-    subgraph FastSafetensors["fastsafetensors"]
-        direction TB
-        P1["Stage 1: File to Device<br/>read_headers_batch() + read_chunked()"]
-        P2["Stage 2: Tensor Broadcasting<br/>Collective communication (NVLink)"]
-        P1 -->|"tensors ready"| P2
-    end
-
-    subgraph ThisProject["fastsafetensor-3fs-reader"]
-        direction LR
-        CPP["C++ Backend<br/>GIL-free, pipelined async H2D"]
-        PY["Python Backend<br/>USRBIO Client API, threaded"]
-        MOCK["Mock Backend<br/>Local filesystem, for testing"]
-    end
-
-    subgraph Storage["3FS Storage"]
-        direction TB
-        SDK["USRBIO SDK<br/>hf3fs_py_usrbio / libhf3fs_api_shared.so"]
-        CLUSTER["3FS Cluster<br/>RDMA network, distributed storage"]
-        SDK -->|"RDMA read"| CLUSTER
-    end
+    FW["SGLang / vLLM<br/>Inference Framework"]
+    P1["Stage 1: File to Device<br/>read_headers_batch() + read_chunked()"]
+    P2["Stage 2: Tensor Broadcasting<br/>Collective communication (NVLink)"]
+    CPP["C++ Backend<br/>GIL-free, pipelined async H2D"]
+    PY["Python Backend<br/>USRBIO Client API, threaded"]
+    MOCK["Mock Backend<br/>Local filesystem, for testing"]
+    SDK["USRBIO SDK<br/>hf3fs_py_usrbio / libhf3fs_api_shared.so"]
+    CLUSTER["3FS Cluster<br/>RDMA network, distributed storage"]
 
     FW -->|"load model weights"| P1
+    P1 -->|"tensors ready"| P2
     P1 -->|"FileReaderInterface"| CPP
     P1 -->|"FileReaderInterface"| PY
     P1 -->|"FileReaderInterface"| MOCK
-    CPP -->|"USRBIO async I/O"| SDK
-    PY -->|"USRBIO Client API"| SDK
+    CPP --> SDK
+    PY --> SDK
+    SDK -->|"RDMA read"| CLUSTER
+
+    subgraph fastsafetensors
+        P1
+        P2
+    end
+
+    subgraph fastsafetensor-3fs-reader
+        CPP
+        PY
+        MOCK
+    end
+
+    subgraph 3FS-Storage
+        SDK
+        CLUSTER
+    end
 
     style FW fill:#4a90d9,color:#fff
     style P1 fill:#f5a623,color:#fff
