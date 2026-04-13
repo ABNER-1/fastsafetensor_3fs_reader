@@ -1,89 +1,155 @@
 # fastsafetensor-3fs-reader
 
-3FS USRBIO file reader for fastsafetensors.
+3FS USRBIO file reader for [fastsafetensors](https://github.com/foundation-model-stack/fastsafetensors).
 
-This package provides a high-performance reader for 3FS USRBIO files with
-two backend implementations (C++ and pure-Python) and a mock for testing.
+## Why This Project
+
+Loading safetensors model weights from [3FS](https://github.com/deepseek-ai/3FS) presents a dilemma:
+
+- **Standard safetensors loading** reads 3FS via the FUSE mount path, but suffers from random reads and redundant memory copies, failing to reach the expected throughput.
+- **3FS USRBIO SDK** provides high-performance user-space I/O, but its best access pattern -- multi-process, sequential, large-block reads -- cannot be directly consumed by inference frameworks like [SGLang](https://github.com/sgl-project/sglang) or [vLLM](https://github.com/vllm-project/vllm).
+
+[fastsafetensors](https://github.com/foundation-model-stack/fastsafetensors) bridges this gap with a **two-stage loading** architecture (see [PR #33](https://github.com/foundation-model-stack/fastsafetensors/pull/33)):
+
+1. **Stage 1 -- File to Device**: copy file data to GPU memory and construct tensors. This stage is bounded by disk/network throughput + PCIe bandwidth.
+2. **Stage 2 -- Tensor Broadcasting**: broadcast tensors to other GPUs via collective communication (e.g. NVLink). This stage is bounded by inter-GPU bandwidth.
+
+Since these two stages depend on different hardware resources, they can be **pipelined** -- Stage 2 for the current batch overlaps with Stage 1 for the next batch, fully utilizing both storage and communication bandwidth.
+
+This project implements the `FileReaderInterface` that fastsafetensors expects for Stage 1, backed by the 3FS USRBIO SDK. It turns USRBIO's multi-process sequential large-block reads into the file reader abstraction that fastsafetensors can directly use.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Inference Framework (SGLang / vLLM / ...)                      │
+│    └── fastsafetensors (two-stage loader)                       │
+│          └── fastsafetensor-3fs-reader  ← this project          │
+│                └── 3FS USRBIO SDK (hf3fs_py_usrbio / libhf3fs)  │
+│                      └── 3FS Storage Cluster (RDMA)             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph Inference["Inference Framework"]
+        FW["SGLang / vLLM<br/>Model serving framework"]
+    end
+
+    subgraph FastSafetensors["fastsafetensors"]
+        direction TB
+        P1["Stage 1: File to Device<br/>read_headers_batch() + read_chunked()"]
+        P2["Stage 2: Tensor Broadcasting<br/>Collective communication (NVLink)"]
+        P1 -->|"tensors ready"| P2
+    end
+
+    subgraph ThisProject["fastsafetensor-3fs-reader"]
+        direction LR
+        CPP["C++ Backend<br/>GIL-free, pipelined async H2D"]
+        PY["Python Backend<br/>USRBIO Client API, threaded"]
+        MOCK["Mock Backend<br/>Local filesystem, for testing"]
+    end
+
+    subgraph Storage["3FS Storage"]
+        direction TB
+        SDK["USRBIO SDK<br/>hf3fs_py_usrbio / libhf3fs_api_shared.so"]
+        CLUSTER["3FS Cluster<br/>RDMA network, distributed storage"]
+        SDK -->|"RDMA read"| CLUSTER
+    end
+
+    FW -->|"load model weights"| P1
+    P1 -->|"FileReaderInterface"| CPP
+    P1 -->|"FileReaderInterface"| PY
+    P1 -->|"FileReaderInterface"| MOCK
+    CPP -->|"USRBIO async I/O"| SDK
+    PY -->|"USRBIO Client API"| SDK
+
+    style FW fill:#4a90d9,color:#fff
+    style P1 fill:#f5a623,color:#fff
+    style P2 fill:#f5a623,color:#fff
+    style CPP fill:#7ed321,color:#fff
+    style PY fill:#7ed321,color:#fff
+    style MOCK fill:#9b9b9b,color:#fff
+    style SDK fill:#bd10e0,color:#fff
+    style CLUSTER fill:#bd10e0,color:#fff
+```
 
 ## Backends
 
 | Backend | Module | Requirements | Performance |
 |---------|--------|-------------|-------------|
-| **C++** | `reader_cpp.py` | `libhf3fs_api_shared.so` + libtorch + CUDA | Best (GIL-free, native USRBIO async I/O) |
-| **Python** | `reader_py.py` | `hf3fs_py_usrbio` (+ optional PyTorch for GPU) | Good (USRBIO via Client API or OS pread) |
+| **C++** | `reader_cpp.py` | `libhf3fs_api_shared.so` + CUDA | Best |
+| **Python** | `reader_py.py` | `hf3fs_py_usrbio` (+ optional PyTorch for GPU) | Good |
 | **Mock** | `mock.py` | None | For testing only |
 
-The package auto-selects the best available backend at import time:
-C++ → Python → Mock.  Use `get_backend()` to check which one is active.
+The package auto-selects the best available backend at import time: **C++ -> Python -> Mock**. Override with `FASTSAFETENSORS_BACKEND=cpp|python|mock` or check the active backend via `get_backend()`.
 
-> **Note:** The C++ backend supports **pipelined mode** (double-buffered async
-> H2D copy via `cudaMemcpyAsync`) which overlaps network I/O with GPU memory
-> transfer for significantly better throughput.  Pass `pipelined=True` to
-> `read_chunked()` to enable it.  The Python backend does not support
-> pipelining and will silently fall back to non-pipelined mode.
+### C++ Backend
+
+The C++ backend (`reader_cpp.py` + `cpp/usrbio_reader_v2.cpp`) provides the highest throughput:
+
+- **GIL-free**: all I/O and memory copy operations run in C++ without holding the Python GIL.
+- **Native USRBIO async I/O**: uses `hf3fs_ior` / `hf3fs_iov` directly for zero-copy reads from 3FS shared memory.
+- **Pipelined mode**: double-buffered async H2D copy via `cudaMemcpyAsync` -- overlaps network I/O with GPU memory transfer. Enable with `pipelined=True` in `read_chunked()`.
+- **CUDA pinned memory**: the USRBIO shared-memory buffer is registered as CUDA pinned memory (`cudaHostRegister`) for faster DMA transfers.
+
+### Python Backend
+
+The Python backend (`reader_py.py`) is a pure-Python implementation:
+
+- Uses `hf3fs_fuse.io` (USRBIO Client API) for I/O when available, falls back to `os.pread` otherwise.
+- Supports GPU memory transfer via PyTorch (`cudaMemcpy`), with optional CUDA host-pinned staging buffer.
+- Does **not** support pipelined mode (silently falls back to non-pipelined).
+- Good for environments where C++ compilation is not feasible.
+
+### Mock Backend
+
+The Mock backend (`mock.py`) reads from the local filesystem using standard `os.pread`:
+
+- No 3FS, CUDA, or external dependencies required.
+- Designed for CI testing and development.
 
 ## Installation
 
-### Pure-Python mode (no C++ compilation)
+### Prerequisites
+
+Both the C++ and Python backends require the **3FS wheel** (`hf3fs_py_usrbio`) to be installed. This package is **not** available on PyPI and must be built from the [DeepSeek 3FS](https://github.com/deepseek-ai/3FS) source tree.
+
+> For a step-by-step guide on building and installing 3FS (including `hf3fs_py_usrbio`), see the [SGLang 3FS integration documentation](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/mem_cache/storage/hf3fs/docs/README.md).
+
+### Install fastsafetensor-3fs-reader
+
+**Pure-Python mode** (skip C++ compilation):
 
 ```bash
 FST3FS_NO_EXT=1 pip install .
 ```
 
-### With C++ extension
-
-Requires `libhf3fs_api_shared.so` (from a 3FS build) and CUDA Runtime.
-The `hf3fs_usrbio.h` header is bundled in the package, so no external
-header dependency is needed:
+**With C++ extension** (requires `libhf3fs_api_shared.so` + CUDA Runtime):
 
 ```bash
-export HF3FS_LIB_DIR=/path/to/3FS/build/lib         # directory with libhf3fs_api_shared.so
+export HF3FS_LIB_DIR=/path/to/3FS/build/lib    # directory containing libhf3fs_api_shared.so
 pip install .
 ```
 
-### Automatic `libhf3fs_api_shared.so` discovery
+The `hf3fs_usrbio.h` header is bundled in the package, so no external header dependency is needed.
 
-At import time, the package automatically searches for
-`libhf3fs_api_shared.so` using the following priority:
+### Automatic `libhf3fs_api_shared.so` Discovery
 
-1. **`HF3FS_LIB_DIR`** environment variable (user-explicit, highest priority).
-2. **`LD_LIBRARY_PATH`** directories (user already configured).
-3. **`hf3fs_py_usrbio` pip install path** — if `hf3fs_py_usrbio` is installed
-   via pip, the library is typically located in a sibling `.libs/` directory
-   (e.g. `site-packages/hf3fs_py_usrbio.libs/`).  This is discovered
-   automatically so you don't need to set `LD_LIBRARY_PATH` manually.
+At import time, the package automatically searches for `libhf3fs_api_shared.so` using the following priority:
 
-The library is pre-loaded with `RTLD_GLOBAL` so that both the C++ and
-Python backends can resolve its symbols.  Use `get_hf3fs_lib_path()` to
-check which path was loaded:
+1. **`HF3FS_LIB_DIR`** environment variable (highest priority).
+2. **`LD_LIBRARY_PATH`** directories.
+3. **`hf3fs_py_usrbio` pip install path** -- if installed via pip, the library is typically in a sibling `.libs/` directory (e.g. `site-packages/hf3fs_py_usrbio.libs/`), discovered automatically.
+
+The library is pre-loaded with `RTLD_GLOBAL` so both backends can resolve its symbols. Check which path was loaded:
 
 ```python
 from fastsafetensor_3fs_reader import get_hf3fs_lib_path
-print(get_hf3fs_lib_path())  # e.g. "/path/to/site-packages/hf3fs_py_usrbio.libs/libhf3fs_api_shared.so"
+print(get_hf3fs_lib_path())
 ```
 
-### Installing hf3fs_py_usrbio (for the Python backend)
-
-`hf3fs_py_usrbio` is **not** available on PyPI.  It must be built from the
-[DeepSeek 3FS](https://github.com/deepseek-ai/3FS) source tree:
-
-```bash
-git clone https://github.com/deepseek-ai/3FS
-cd 3FS
-git submodule update --init --recursive
-# Follow 3FS build instructions (cmake, etc.)
-# After build, install the Python package:
-cd build && pip install ..
-```
-
-> **Important:** The default pip-installed `hf3fs_py_usrbio` package is
-> suitable for **testing and validation** but is **not recommended for
-> production use**.  For production deployments, build 3FS from source with
-> optimized compiler flags tailored to your hardware.  Refer to projects like
-> [SGLang](https://github.com/sgl-project/sglang) for examples of
-> production-grade 3FS compilation workflows.
-
-## Usage
+## Quick Start
 
 ```python
 from fastsafetensor_3fs_reader import (
@@ -96,20 +162,17 @@ from fastsafetensor_3fs_reader import (
 # Check which backend is active
 print(f"Backend: {get_backend()}")  # "cpp", "python", or "mock"
 
-# Use mock reader for testing (always available)
-reader = MockFileReader()
-headers = reader.read_headers_batch(["/path/to/file.safetensors"])
-reader.close()
-
 # Use 3FS reader when available
 if is_available():
     reader = ThreeFSFileReader(mount_point="/mnt/3fs")
+
+    # Stage 1a: read headers (opens fds, caches them for reuse)
     headers = reader.read_headers_batch([
         "/mnt/3fs/model-00001.safetensors",
         "/mnt/3fs/model-00002.safetensors",
     ])
 
-    # Read tensor data into GPU memory
+    # Stage 1b: read tensor data into GPU memory
     import torch
     buf = torch.empty(1024 * 1024, dtype=torch.uint8, device="cuda")
     bytes_read = reader.read_chunked(
@@ -121,72 +184,21 @@ if is_available():
     reader.close()
 ```
 
-## Benchmark
+## Performance
 
-The `hack/benchmark/` directory contains a comprehensive benchmarking suite.
-Use `benchmark_runner.py` to measure read throughput across different backends,
-buffer sizes, chunk sizes, and process counts.
+> **Test environment:** Single 400 Gbps RDMA NIC, DeepSeek-V3 (~640 GB safetensors).
 
-### Full benchmark (read + GPU copy)
-
-```bash
-python hack/benchmark/benchmark_runner.py \
-    --mount-point /mnt/3fs \
-    --backends cpp,python \
-    --buffer-sizes 8,16,32,64,128,256,512 \
-    --chunk-sizes 8,16,32,64,128,256,512 \
-    --num-processes 1,2,4,8 \
-    --iterations 3
-```
-
-### Download-only benchmark (host memory only, no GPU copy)
-
-```bash
-python hack/benchmark/benchmark_runner.py \
-    --mount-point /mnt/3fs \
-    --backends cpp,python \
-    --buffer-sizes 8,16,32,64,128,256,512 \
-    --chunk-sizes 8,16,32,64,128,256,512 \
-    --num-processes 1,2,4,8 \
-    --download-only \
-    --iterations 3
-```
-
-### Key parameters
-
-| Parameter | Description | Default                       |
-|-----------|-------------|-------------------------------|
-| `--mount-point` | 3FS FUSE mount-point path | *(required)*                  |
-| `--backends` | Comma-separated backend names | `mock,python,cpp`             |
-| `--buffer-sizes` | Buffer sizes in MB | `8,16,32,64,128,256,512,1024` |
-| `--chunk-sizes` | Chunk sizes in MB | `8,16,32,64,128,256,512,1024`         |
-| `--num-processes` | Process counts | `1,2,4,8`                     |
-| `--download-only` | Read into host memory only (skip GPU copy) | `false`                       |
-| `--iterations` | Iterations per combination | `3`                           |
-| `--mode` | `grid` (sweep all combos) or `single` | `grid`                        |
-| `--output-dir` | Directory for CSV and chart output | `./benchmark_results`         |
-
-### Performance Results
-
-> **Test environment:** Single 400 Gbps RDMA NIC.
-> These numbers represent a **loading baseline** under specific storage and
-> network hardware conditions — they do **not** represent the performance
-> ceiling of the system.
-
-**Model:** DeepSeek-V3 (total ~640 GB safetensors)
-
-| Configuration | Avg Throughput (GB/s) | Peak Throughput with fastsafetensors (GB/s) | Load Time (s) | Backend |
+| Configuration | Avg Throughput (GB/s) | Peak with fastsafetensors (GB/s) | Load Time (s) | Backend |
 |---|---|---|---|---|
 | 8 processes, buffer=8 MB | 35.0 | 32.0 | 30.34 | C++ (non-pipelined) |
 | 8 processes, buffer=16 MB | 37.6 | 36.6 | 25.73 | C++ (pipelined) |
 
-#### Benchmark: RDMA throughput across buffer sizes (8M / 16M / 32M)
-
 ![RDMA throughput across buffer sizes](docs/images/cpp_performance.png)
 
-#### Production: model weight loading with fastsafetensors (pipelined, peak 36.6 GB/s)
+![Model weight loading with fastsafetensors (pipelined, peak 36.6 GB/s)](docs/images/cpp_load.png)
 
-![Model weight loading throughput](docs/images/cpp_load.png)
+For the full benchmarking suite (sweep backends, buffer sizes, chunk sizes, process counts), see [`hack/benchmark/`](hack/benchmark/).
+
 ## License
 
 Apache-2.0
