@@ -20,16 +20,15 @@ from ._lib_preload import get_hf3fs_lib_path, preload_hf3fs_library
 
 preload_hf3fs_library()  # must run before any backend import
 
-from ._mount_utils import extract_mount_point
-from .interface import FileReaderInterface
-from .mock import MockFileReader
-
+from ._mount_utils import extract_mount_point  # noqa: E402  # isort: skip
 from ._backend import (  # noqa: E402
     create_reader,
     get_backend,
     init_backend,
     is_available,
 )
+from .interface import FileReaderInterface  # noqa: E402
+from .mock import MockFileReader  # noqa: E402
 
 # init_backend() must run BEFORE importing ThreeFSFileReader: Python's
 # ``from mod import name`` captures the value at import time.

@@ -33,11 +33,11 @@ jobs:
       - name: Verify import
         run: |
           python -c "
-          from fastsafetensor_3fs_reader import MockFileReader, FileReaderInterface, is_available
-          print(f'is_available: {is_available()}')
+          from fastsafetensor_3fs_reader import MockFileReader, FileReaderInterface, is_available, get_backend
+          print(f'is_available: {is_available()}, backend: {get_backend()}')
           print(f'MockFileReader: {MockFileReader}')
           print(f'FileReaderInterface: {FileReaderInterface}')
-          assert not is_available(), 'C++ extension should not be available in pure mode'
+          assert get_backend() != 'cpp', 'C++ backend should not be available in pure mode'
           print('All imports OK')
           "
 

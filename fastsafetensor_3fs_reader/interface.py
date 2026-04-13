@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 
+
 class FileReaderInterface(ABC):
     """Minimal abstract interface for 3FS file readers.
 

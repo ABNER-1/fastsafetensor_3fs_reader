@@ -9,6 +9,7 @@ import os
 from .cpp import _core_v2  # type: ignore[attr-defined]
 from .interface import FileReaderInterface
 
+
 def check_library() -> bool:
     try:
         return _core_v2.check_library()

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import struct
-from typing import Optional
 
 import pytest
 

@@ -4,16 +4,11 @@
 
 from __future__ import annotations
 
-import importlib
 import os
-import sys
 from pathlib import Path
 from unittest import mock
 
-import pytest
-
 from fastsafetensor_3fs_reader import _lib_preload
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -244,7 +239,7 @@ class TestPreloadHf3fsLibrary:
     def test_idempotent_second_call(self, tmp_path, monkeypatch):
         """Second call returns True immediately without re-loading."""
         env_dir = tmp_path / "env"
-        so = _create_fake_so(env_dir)
+        _create_fake_so(env_dir)
         monkeypatch.setenv("HF3FS_LIB_DIR", str(env_dir))
 
         with mock.patch("ctypes.CDLL") as mock_cdll:
