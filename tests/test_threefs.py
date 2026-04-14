@@ -13,7 +13,8 @@ import struct
 
 import pytest
 
-from fastsafetensor_3fs_reader import FileReaderInterface, MockFileReader, is_available
+from fastsafetensor_3fs_reader import (FileReaderInterface, MockFileReader,
+                                       is_available)
 
 pytestmark = pytest.mark.skipif(
     not is_available() or not os.environ.get("THREEFS_MOUNT_POINT"),
@@ -130,7 +131,9 @@ class TestReadChunked:
         threefs_reader.read_headers_batch([tmp_safetensors])
         assert threefs_reader.has_fd(tmp_safetensors)
 
-        threefs_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
+        threefs_reader.read_chunked(
+            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
+        )
         assert threefs_reader.has_fd(tmp_safetensors)
 
     def test_nonexistent_file_raises(self, threefs_reader):
@@ -346,9 +349,13 @@ class TestErrorHandling:
         with pytest.raises(Exception):  # noqa: B017
             threefs_reader.read_headers_batch(["/nonexistent/model.safetensors"])
 
-    def test_read_headers_batch_mixed_paths_raises(self, threefs_reader, tmp_safetensors):
+    def test_read_headers_batch_mixed_paths_raises(
+        self, threefs_reader, tmp_safetensors
+    ):
         with pytest.raises(Exception):  # noqa: B017
-            threefs_reader.read_headers_batch([tmp_safetensors, "/nonexistent/model.safetensors"])
+            threefs_reader.read_headers_batch(
+                [tmp_safetensors, "/nonexistent/model.safetensors"]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +405,9 @@ class TestPythonBackend:
         )
         assert bytes_read == file_size
 
-    def test_python_backend_data_integrity(self, threefs_reader_py, tmp_safetensors_large):
+    def test_python_backend_data_integrity(
+        self, threefs_reader_py, tmp_safetensors_large
+    ):
         """Test data integrity with Python backend using an independent host buffer."""
         filepath, expected_data = tmp_safetensors_large
         data_len = len(expected_data)

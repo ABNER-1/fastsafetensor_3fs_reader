@@ -19,13 +19,13 @@ Since these two stages depend on different hardware resources, they can be **pip
 This project implements the `FileReaderInterface` that fastsafetensors expects for Stage 1, backed by the 3FS USRBIO SDK. It turns USRBIO's multi-process sequential large-block reads into the file reader abstraction that fastsafetensors can directly use.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Inference Framework (SGLang / vLLM / ...)                      │
-│    └── fastsafetensors (two-stage loader)                       │
-│          └── fastsafetensor-3fs-reader  ← this project          │
-│                └── 3FS USRBIO SDK (hf3fs_py_usrbio / libhf3fs)  │
-│                      └── 3FS Storage Cluster (RDMA)             │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  Inference Framework (SGLang / vLLM / ...)                                      │
+│    └── fastsafetensors (two-stage loader)               ── fastsafetensors repo │
+│          └── fastsafetensor-3fs-reader                  ── this project         │
+│                └── 3FS USRBIO SDK (hf3fs_py_usrbio / libhf3fs)  ── 3FS repo     │
+│                      └── 3FS Storage Cluster (RDMA)             ── 3FS repo     │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Architecture
@@ -205,7 +205,7 @@ print(f"Backend: {get_backend()}")  # "cpp", "python", or "mock"
 if is_available():
     reader = ThreeFSFileReader(mount_point="/mnt/3fs")
 
-    # Stage 1a: read headers (opens fds, caches them for reuse)
+    # Stage 1a: read headers (optional: caches fds to avoid re-open/re-fetch on network storage)
     headers = reader.read_headers_batch([
         "/mnt/3fs/model-00001.safetensors",
         "/mnt/3fs/model-00002.safetensors",

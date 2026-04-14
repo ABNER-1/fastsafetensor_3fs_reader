@@ -40,10 +40,20 @@ class FileReaderInterface(ABC):
         paths: list[str],
         num_threads: int = 8,
     ) -> dict[str, tuple[str, int, int]]:
-        """Opens each file, caches the fd for later read_chunked reuse.
+        """Read safetensor headers from multiple files in parallel.
 
-        Returns Dict[path, (header_json, header_length, file_size)]
-        where header_length = 8 + len(header_json_bytes).
+        Reading headers on network-backed storage may trigger data retrieval
+        from the origin server, which can be expensive.  This method
+        optionally caches the opened fd for each file so that a subsequent
+        ``read_chunked`` call can reuse it instead of opening the file again.
+        Caching is not required for correctness — callers that skip it will
+        still work, but may see degraded download performance on network
+        storage because each ``read_chunked`` call would need to re-open
+        (and potentially re-fetch) the file.
+
+        Returns:
+            Dict[path, (header_json, header_length, file_size)]
+            where header_length = 8 + len(header_json_bytes).
         """
         ...
 

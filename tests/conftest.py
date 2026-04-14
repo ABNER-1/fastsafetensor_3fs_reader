@@ -153,7 +153,8 @@ def threefs_reader_py(threefs_mount_point):
     Forces the Python backend regardless of C++ availability.
     Skips if hf3fs_fuse.io is not available.
     """
-    from fastsafetensor_3fs_reader.reader_py import ThreeFSFileReaderPy, check_library
+    from fastsafetensor_3fs_reader.reader_py import (ThreeFSFileReaderPy,
+                                                     check_library)
 
     if not check_library():
         pytest.skip("hf3fs_fuse.io not available — skipping Python backend tests")

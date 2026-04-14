@@ -29,10 +29,10 @@ import sys
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-
 # ---------------------------------------------------------------------------
 # CSV Data Loading
 # ---------------------------------------------------------------------------
+
 
 def load_summary_csv(csv_path: str) -> List[Dict[str, Any]]:
     """Load benchmark_summary.csv and return list of summary records."""
@@ -77,7 +77,9 @@ def load_raw_csv(csv_path: str) -> List[Dict[str, Any]]:
                 "wall_time": float(row["wall_time"]),
                 "throughput_mbps": float(row["throughput_mbps"]),
                 "throughput_gbps": float(row["throughput_gbps"]),
-                "round_wall_time": float(row["round_wall_time"]) if row["round_wall_time"] else None,
+                "round_wall_time": (
+                    float(row["round_wall_time"]) if row["round_wall_time"] else None
+                ),
                 "success": row["success"].lower() == "true",
                 "error": row.get("error", ""),
             }
@@ -89,6 +91,7 @@ def load_raw_csv(csv_path: str) -> List[Dict[str, Any]]:
 # Chart Generation
 # ---------------------------------------------------------------------------
 
+
 def generate_heatmaps(
     summaries: List[Dict[str, Any]],
     output_dir: str,
@@ -97,6 +100,7 @@ def generate_heatmaps(
     """Generate heatmap charts showing buffer_size vs chunk_size for each backend and num_processes."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import numpy as np
@@ -152,9 +156,7 @@ def generate_heatmaps(
             ax.set_yticklabels([str(b) for b in all_buf])
             ax.set_xlabel("chunk_size (MB)")
             ax.set_ylabel("buffer_size (MB)")
-            ax.set_title(
-                f"Throughput (GB/s) -- backend={backend}, procs={nprocs}"
-            )
+            ax.set_title(f"Throughput (GB/s) -- backend={backend}, procs={nprocs}")
             fig.colorbar(im, ax=ax, label="GB/s")
 
             # Annotate cells with values
@@ -163,8 +165,11 @@ def generate_heatmaps(
                     val = matrix[i, j]
                     if not np.isnan(val):
                         ax.text(
-                            j, i, f"{val:.2f}",
-                            ha="center", va="center",
+                            j,
+                            i,
+                            f"{val:.2f}",
+                            ha="center",
+                            va="center",
                             color="black" if val < np.nanmax(matrix) * 0.7 else "white",
                             fontsize=8,
                         )
@@ -188,6 +193,7 @@ def generate_lineplot(
     """Generate line plot showing throughput vs num_processes for each backend."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError as e:
@@ -217,9 +223,7 @@ def generate_lineplot(
     for backend in backends:
         backend_summaries = [s for s in summaries if s["backend"] == backend]
         if backend_summaries:
-            best = max(
-                backend_summaries, key=lambda s: s["throughput_gbps_median"]
-            )
+            best = max(backend_summaries, key=lambda s: s["throughput_gbps_median"])
             best_configs[backend] = (
                 best["buffer_size_mb"],
                 best["chunk_size_mb"],
@@ -231,7 +235,15 @@ def generate_lineplot(
 
     fig, ax = plt.subplots(figsize=(10, 6))
     markers = ["o", "s", "^", "D", "v", "p", "*"]
-    colors = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0", "#F44336", "#00BCD4", "#795548"]
+    colors = [
+        "#2196F3",
+        "#4CAF50",
+        "#FF9800",
+        "#9C27B0",
+        "#F44336",
+        "#00BCD4",
+        "#795548",
+    ]
 
     for idx, backend in enumerate(backends):
         if backend not in best_configs:
@@ -248,7 +260,8 @@ def generate_lineplot(
             marker = markers[idx % len(markers)]
             color = colors[idx % len(colors)]
             ax.plot(
-                xs, ys,
+                xs,
+                ys,
                 marker=marker,
                 color=color,
                 label=f"{backend} (buf={buf_mb}MB, chunk={chunk_mb}MB)",
@@ -281,6 +294,7 @@ def generate_barplot(
     """Generate bar chart comparing best config of each backend."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError as e:
@@ -302,9 +316,7 @@ def generate_barplot(
     bar_configs = []
 
     for backend in backends:
-        backend_summaries = [
-            s for s in summaries if s["backend"] == backend
-        ]
+        backend_summaries = [s for s in summaries if s["backend"] == backend]
         if backend_summaries:
             best = max(
                 backend_summaries,
@@ -355,6 +367,7 @@ def generate_barplot(
 # Data Interpretation Report
 # ---------------------------------------------------------------------------
 
+
 def generate_interpretation_report(
     summaries: List[Dict[str, Any]],
     output_dir: str,
@@ -398,8 +411,10 @@ def generate_interpretation_report(
             procs_tp[key][s["num_processes"]] = s["throughput_gbps_median"]
 
         # Find best config's scalability
-        best_key = (best_per_backend[backend]["buffer_size_mb"],
-                    best_per_backend[backend]["chunk_size_mb"])
+        best_key = (
+            best_per_backend[backend]["buffer_size_mb"],
+            best_per_backend[backend]["chunk_size_mb"],
+        )
         if best_key in procs_tp:
             proc_data = procs_tp[best_key]
             sorted_procs = sorted(proc_data.items())
@@ -408,7 +423,9 @@ def generate_interpretation_report(
                 last_proc, last_tp = sorted_procs[-1]
                 ideal_scaling = last_proc / first_proc
                 actual_scaling = last_tp / first_tp if first_tp > 0 else 0
-                efficiency = (actual_scaling / ideal_scaling * 100) if ideal_scaling > 0 else 0
+                efficiency = (
+                    (actual_scaling / ideal_scaling * 100) if ideal_scaling > 0 else 0
+                )
                 scalability_analysis[backend] = {
                     "first_procs": first_proc,
                     "first_tp": first_tp,
@@ -444,40 +461,46 @@ def generate_interpretation_report(
             f"| {rank} | {backend} | {best['throughput_gbps_median']:.3f} | {config} | {speedup:.2f}x |"
         )
 
-    lines.extend([
-        "",
-        "## Detailed Analysis by Backend",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Detailed Analysis by Backend",
+            "",
+        ]
+    )
 
     for backend in sorted(by_backend.keys()):
         rows = by_backend[backend]
         best = best_per_backend[backend]
 
-        lines.extend([
-            f"### {backend.upper()} Backend",
-            "",
-            f"**Best Configuration**:",
-            f"- Buffer Size: {best['buffer_size_mb']} MB",
-            f"- Chunk Size: {best['chunk_size_mb']} MB",
-            f"- Num Processes: {best['num_processes']}",
-            f"- Median Throughput: **{best['throughput_gbps_median']:.3f} GB/s**",
-            f"- Std Dev: {best['throughput_gbps_std']:.3f} GB/s",
-            f"- Min/Max: {best['throughput_gbps_min']:.3f} / {best['throughput_gbps_max']:.3f} GB/s",
-            "",
-        ])
+        lines.extend(
+            [
+                f"### {backend.upper()} Backend",
+                "",
+                f"**Best Configuration**:",
+                f"- Buffer Size: {best['buffer_size_mb']} MB",
+                f"- Chunk Size: {best['chunk_size_mb']} MB",
+                f"- Num Processes: {best['num_processes']}",
+                f"- Median Throughput: **{best['throughput_gbps_median']:.3f} GB/s**",
+                f"- Std Dev: {best['throughput_gbps_std']:.3f} GB/s",
+                f"- Min/Max: {best['throughput_gbps_min']:.3f} / {best['throughput_gbps_max']:.3f} GB/s",
+                "",
+            ]
+        )
 
         # Scalability analysis
         if backend in scalability_analysis:
             sa = scalability_analysis[backend]
-            lines.extend([
-                "**Scalability Analysis**:",
-                f"- From {sa['first_procs']} to {sa['last_procs']} processes:",
-                f"  - Throughput: {sa['first_tp']:.3f} -> {sa['last_tp']:.3f} GB/s",
-                f"  - Actual scaling: {sa['actual_scaling']:.2f}x (ideal: {sa['ideal_scaling']:.2f}x)",
-                f"  - Parallel efficiency: **{sa['efficiency']:.1f}%**",
-                "",
-            ])
+            lines.extend(
+                [
+                    "**Scalability Analysis**:",
+                    f"- From {sa['first_procs']} to {sa['last_procs']} processes:",
+                    f"  - Throughput: {sa['first_tp']:.3f} -> {sa['last_tp']:.3f} GB/s",
+                    f"  - Actual scaling: {sa['actual_scaling']:.2f}x (ideal: {sa['ideal_scaling']:.2f}x)",
+                    f"  - Parallel efficiency: **{sa['efficiency']:.1f}%**",
+                    "",
+                ]
+            )
 
             if sa["efficiency"] < 50:
                 lines.append(
@@ -497,10 +520,12 @@ def generate_interpretation_report(
             lines.append("")
 
         # Parameter sensitivity
-        lines.extend([
-            "**Parameter Sensitivity**:",
-            "",
-        ])
+        lines.extend(
+            [
+                "**Parameter Sensitivity**:",
+                "",
+            ]
+        )
 
         # Buffer size impact
         buf_sizes = sorted({r["buffer_size_mb"] for r in rows})
@@ -508,10 +533,14 @@ def generate_interpretation_report(
             buf_impact = []
             for buf in buf_sizes:
                 buf_rows = [r for r in rows if r["buffer_size_mb"] == buf]
-                avg_tp = sum(r["throughput_gbps_median"] for r in buf_rows) / len(buf_rows)
+                avg_tp = sum(r["throughput_gbps_median"] for r in buf_rows) / len(
+                    buf_rows
+                )
                 buf_impact.append((buf, avg_tp))
             best_buf = max(buf_impact, key=lambda x: x[1])
-            lines.append(f"- Buffer size impact: Best at {best_buf[0]}MB (avg {best_buf[1]:.3f} GB/s)")
+            lines.append(
+                f"- Buffer size impact: Best at {best_buf[0]}MB (avg {best_buf[1]:.3f} GB/s)"
+            )
 
         # Chunk size impact
         chunk_sizes = sorted({r["chunk_size_mb"] for r in rows})
@@ -519,26 +548,32 @@ def generate_interpretation_report(
             chunk_impact = []
             for chunk in chunk_sizes:
                 chunk_rows = [r for r in rows if r["chunk_size_mb"] == chunk]
-                avg_tp = sum(r["throughput_gbps_median"] for r in chunk_rows) / len(chunk_rows)
+                avg_tp = sum(r["throughput_gbps_median"] for r in chunk_rows) / len(
+                    chunk_rows
+                )
                 chunk_impact.append((chunk, avg_tp))
             best_chunk = max(chunk_impact, key=lambda x: x[1])
-            lines.append(f"- Chunk size impact: Best at {best_chunk[0]}MB (avg {best_chunk[1]:.3f} GB/s)")
+            lines.append(
+                f"- Chunk size impact: Best at {best_chunk[0]}MB (avg {best_chunk[1]:.3f} GB/s)"
+            )
 
         lines.append("")
 
-    lines.extend([
-        "## Recommendations",
-        "",
-        "Based on the benchmark results:",
-        "",
-        f"1. **Use `{overall_best[0]}` backend** for best overall performance "
-        f"({overall_best[1]['throughput_gbps_median']:.3f} GB/s).",
-        "",
-        f"2. **Optimal configuration**: buffer={overall_best[1]['buffer_size_mb']}MB, "
-        f"chunk={overall_best[1]['chunk_size_mb']}MB, "
-        f"num_processes={overall_best[1]['num_processes']}.",
-        "",
-    ])
+    lines.extend(
+        [
+            "## Recommendations",
+            "",
+            "Based on the benchmark results:",
+            "",
+            f"1. **Use `{overall_best[0]}` backend** for best overall performance "
+            f"({overall_best[1]['throughput_gbps_median']:.3f} GB/s).",
+            "",
+            f"2. **Optimal configuration**: buffer={overall_best[1]['buffer_size_mb']}MB, "
+            f"chunk={overall_best[1]['chunk_size_mb']}MB, "
+            f"num_processes={overall_best[1]['num_processes']}.",
+            "",
+        ]
+    )
 
     # Add scalability recommendation
     best_scalable = None
@@ -559,19 +594,21 @@ def generate_interpretation_report(
             "Consider investigating I/O bottlenecks or reducing lock contention."
         )
 
-    lines.extend([
-        "",
-        "## Raw Data Summary",
-        "",
-        f"- Total successful configurations: {len(summaries)}",
-        f"- Backends tested: {', '.join(sorted(by_backend.keys()))}",
-        f"- Process counts: {', '.join(map(str, sorted({s['num_processes'] for s in summaries})))}",
-        f"- Buffer sizes: {', '.join(map(str, sorted({s['buffer_size_mb'] for s in summaries})))} MB",
-        f"- Chunk sizes: {', '.join(map(str, sorted({s['chunk_size_mb'] for s in summaries})))} MB",
-        "",
-        "---",
-        "*Generated by generate_charts_from_csv.py*",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Raw Data Summary",
+            "",
+            f"- Total successful configurations: {len(summaries)}",
+            f"- Backends tested: {', '.join(sorted(by_backend.keys()))}",
+            f"- Process counts: {', '.join(map(str, sorted({s['num_processes'] for s in summaries})))}",
+            f"- Buffer sizes: {', '.join(map(str, sorted({s['buffer_size_mb'] for s in summaries})))} MB",
+            f"- Chunk sizes: {', '.join(map(str, sorted({s['chunk_size_mb'] for s in summaries})))} MB",
+            "",
+            "---",
+            "*Generated by generate_charts_from_csv.py*",
+        ]
+    )
 
     report_path = os.path.join(output_dir, "data_interpretation_report.md")
     with open(report_path, "w") as f:
@@ -584,6 +621,7 @@ def generate_interpretation_report(
 # ---------------------------------------------------------------------------
 # Console Report (from benchmark_report.py)
 # ---------------------------------------------------------------------------
+
 
 def print_console_report(summaries: List[Dict[str, Any]]) -> None:
     """Print a formatted console report with per-backend tables."""
@@ -671,9 +709,7 @@ def print_console_report(summaries: List[Dict[str, Any]]) -> None:
                 f"p={best['num_processes']}"
             )
             speedup = (
-                best["throughput_gbps_median"] / baseline_tp
-                if baseline_tp > 0
-                else 0.0
+                best["throughput_gbps_median"] / baseline_tp if baseline_tp > 0 else 0.0
             )
             print(
                 f"{backend:<10} {config:<30} "
@@ -687,6 +723,7 @@ def print_console_report(summaries: List[Dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 # Main Entry Point
 # ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -815,7 +852,9 @@ Examples:
 
     # Summary
     print(f"\n{'=' * 60}")
-    print(f"Generated {len(generated_files)} files in: {os.path.abspath(args.output_dir)}")
+    print(
+        f"Generated {len(generated_files)} files in: {os.path.abspath(args.output_dir)}"
+    )
     print(f"{'=' * 60}")
     for f in generated_files:
         print(f"  - {os.path.basename(f)}")

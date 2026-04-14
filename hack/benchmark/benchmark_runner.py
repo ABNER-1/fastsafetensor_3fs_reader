@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """Benchmark runner: multi-dimensional parameter sweep for 3FS reader backends.
 
@@ -74,25 +73,21 @@ if _HACK_DIR not in sys.path:
 # The package is imported lazily inside benchmark_worker_process() instead,
 # exactly as test_usrbio_common.py does.
 
+from benchmark_report import (aggregate_headers_batch_results,
+                              aggregate_results, export_csv,
+                              export_headers_batch_csv, generate_charts,
+                              print_console_report, print_headers_batch_report)
 from benchmark_worker import run_benchmark_round, run_headers_batch_round
-from benchmark_report import (
-    aggregate_results,
-    export_csv,
-    generate_charts,
-    print_console_report,
-    aggregate_headers_batch_results,
-    print_headers_batch_report,
-    export_headers_batch_csv,
-)
-
 
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+
 def _parse_int_list(value: str) -> List[int]:
     """Parse a comma-separated string of integers."""
     return [int(x.strip()) for x in value.split(",") if x.strip()]
+
 
 def _parse_float_list(value: str) -> List[float]:
     """Parse a comma-separated string of numbers (int or float, e.g. '0.5,1,2,4')."""
@@ -204,8 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_int_list,
         default=[4, 8, 16],
         help=(
-            "Comma-separated num_threads values for headers_batch "
-            "(default: 4,8,16)"
+            "Comma-separated num_threads values for headers_batch " "(default: 4,8,16)"
         ),
     )
 
@@ -263,6 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Parameter combination generation
 # ---------------------------------------------------------------------------
+
 
 def generate_combinations(
     backends: List[str],
@@ -357,6 +352,7 @@ def generate_headers_batch_combinations(
 # Main benchmark loop
 # ---------------------------------------------------------------------------
 
+
 def run_benchmark(args: argparse.Namespace) -> None:
     """Execute the full benchmark according to parsed CLI arguments."""
 
@@ -432,8 +428,12 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 chunk_mb = combo["chunk_size_mb"]
                 nprocs = combo["num_processes"]
 
-                buffer_size = int(buf_mb * 1024 * 1024) if buf_mb > 0 else 64 * 1024 * 1024
-                chunk_size = int(chunk_mb * 1024 * 1024) if chunk_mb > 0 else 64 * 1024 * 1024
+                buffer_size = (
+                    int(buf_mb * 1024 * 1024) if buf_mb > 0 else 64 * 1024 * 1024
+                )
+                chunk_size = (
+                    int(chunk_mb * 1024 * 1024) if chunk_mb > 0 else 64 * 1024 * 1024
+                )
 
                 progress = f"[{idx}/{len(combos)}]"
                 print(
@@ -523,7 +523,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
         else:
             print(f"\n[headers_batch] Total parameter combinations: {len(hb_combos)}")
             # Use a representative buffer_size for reader construction
-            buf_bytes = (args.buffer_sizes[0] if args.buffer_sizes else 64) * 1024 * 1024
+            buf_bytes = (
+                (args.buffer_sizes[0] if args.buffer_sizes else 64) * 1024 * 1024
+            )
             all_hb_results: List[Dict[str, Any]] = []
 
             for idx, combo in enumerate(hb_combos, 1):
@@ -602,9 +604,11 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
     print(f"\nAll results saved to: {os.path.abspath(args.output_dir)}")
 
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = build_parser()

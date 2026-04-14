@@ -187,7 +187,9 @@ class TestFindInPipPackages:
 
     def test_handles_module_not_found_error(self):
         """Gracefully handles ModuleNotFoundError from find_spec."""
-        with mock.patch("importlib.util.find_spec", side_effect=ModuleNotFoundError("no module")):
+        with mock.patch(
+            "importlib.util.find_spec", side_effect=ModuleNotFoundError("no module")
+        ):
             assert _lib_preload._find_in_pip_packages() is None
 
 
@@ -208,14 +210,18 @@ class TestPreloadHf3fsLibrary:
     def test_returns_false_when_nothing_found(self, monkeypatch):
         monkeypatch.delenv("HF3FS_LIB_DIR", raising=False)
         monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
-        with mock.patch.object(_lib_preload, "_find_in_pip_packages", return_value=None):
+        with mock.patch.object(
+            _lib_preload, "_find_in_pip_packages", return_value=None
+        ):
             assert _lib_preload.preload_hf3fs_library() is False
 
     def test_does_not_raise_on_failure(self, monkeypatch):
         """preload_hf3fs_library must never raise — it's a best-effort fallback."""
         monkeypatch.delenv("HF3FS_LIB_DIR", raising=False)
         monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
-        with mock.patch.object(_lib_preload, "_find_in_pip_packages", return_value=None):
+        with mock.patch.object(
+            _lib_preload, "_find_in_pip_packages", return_value=None
+        ):
             # Should not raise
             result = _lib_preload.preload_hf3fs_library()
             assert result is False
@@ -256,7 +262,9 @@ class TestPreloadHf3fsLibrary:
         pip_so = str(tmp_path / "fake.so")
         Path(pip_so).touch()
 
-        with mock.patch.object(_lib_preload, "_find_in_pip_packages", return_value=pip_so):
+        with mock.patch.object(
+            _lib_preload, "_find_in_pip_packages", return_value=pip_so
+        ):
             with mock.patch("ctypes.CDLL") as mock_cdll:
                 result = _lib_preload.preload_hf3fs_library()
                 assert result is True
@@ -303,6 +311,8 @@ class TestGetHf3fsLibPath:
     def test_returns_none_after_failed_preload(self, monkeypatch):
         monkeypatch.delenv("HF3FS_LIB_DIR", raising=False)
         monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
-        with mock.patch.object(_lib_preload, "_find_in_pip_packages", return_value=None):
+        with mock.patch.object(
+            _lib_preload, "_find_in_pip_packages", return_value=None
+        ):
             _lib_preload.preload_hf3fs_library()
             assert _lib_preload.get_hf3fs_lib_path() is None

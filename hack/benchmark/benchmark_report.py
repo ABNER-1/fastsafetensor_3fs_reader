@@ -16,10 +16,10 @@ import statistics
 from collections import defaultdict
 from typing import Any, Dict, List, Tuple
 
-
 # ---------------------------------------------------------------------------
 # 1. Data aggregation
 # ---------------------------------------------------------------------------
+
 
 def aggregate_results(
     raw_results: List[Dict[str, Any]],
@@ -103,6 +103,7 @@ def aggregate_results(
 # ---------------------------------------------------------------------------
 # 2. Console report
 # ---------------------------------------------------------------------------
+
 
 def print_console_report(summaries: List[Dict[str, Any]]) -> None:
     """Print a formatted console report with per-backend tables and a
@@ -193,9 +194,7 @@ def print_console_report(summaries: List[Dict[str, Any]]) -> None:
                 f"p={best['num_processes']}"
             )
             speedup = (
-                best["throughput_gbps_median"] / baseline_tp
-                if baseline_tp > 0
-                else 0.0
+                best["throughput_gbps_median"] / baseline_tp if baseline_tp > 0 else 0.0
             )
             print(
                 f"{backend:<10} {config:<30} "
@@ -209,6 +208,7 @@ def print_console_report(summaries: List[Dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 # 3. CSV export
 # ---------------------------------------------------------------------------
+
 
 def export_csv(
     raw_results: List[Dict[str, Any]],
@@ -264,9 +264,7 @@ def export_csv(
         "num_iterations",
     ]
     with open(summary_path, "w", newline="") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=summary_fields, extrasaction="ignore"
-        )
+        writer = csv.DictWriter(f, fieldnames=summary_fields, extrasaction="ignore")
         writer.writeheader()
         for s in summaries:
             writer.writerow(s)
@@ -279,6 +277,7 @@ def export_csv(
 # ---------------------------------------------------------------------------
 # 4. Matplotlib chart generation
 # ---------------------------------------------------------------------------
+
 
 def generate_charts(
     summaries: List[Dict[str, Any]],
@@ -296,13 +295,13 @@ def generate_charts(
     """
     try:
         import matplotlib
+
         matplotlib.use("Agg")  # non-interactive backend
         import matplotlib.pyplot as plt
         import numpy as np
     except ImportError as e:
         print(
-            "WARNING: matplotlib/numpy not available -- skipping chart "
-            "generation."
+            "WARNING: matplotlib/numpy not available -- skipping chart " "generation."
         )
         print(f"\nMissing dependency: {e}")
         print("\nTo generate charts later, you can:")
@@ -360,9 +359,7 @@ def generate_charts(
             ax.set_yticklabels([str(b) for b in all_buf])
             ax.set_xlabel("chunk_size (MB)")
             ax.set_ylabel("buffer_size (MB)")
-            ax.set_title(
-                f"Throughput (GB/s) -- backend={backend}, procs={nprocs}"
-            )
+            ax.set_title(f"Throughput (GB/s) -- backend={backend}, procs={nprocs}")
             fig.colorbar(im, ax=ax, label="GB/s")
 
             # Annotate cells with values
@@ -371,8 +368,11 @@ def generate_charts(
                     val = matrix[i, j]
                     if not np.isnan(val):
                         ax.text(
-                            j, i, f"{val:.2f}",
-                            ha="center", va="center",
+                            j,
+                            i,
+                            f"{val:.2f}",
+                            ha="center",
+                            va="center",
                             color="black" if val < np.nanmax(matrix) * 0.7 else "white",
                             fontsize=8,
                         )
@@ -391,9 +391,7 @@ def generate_charts(
     for backend in backends:
         backend_summaries = [s for s in summaries if s["backend"] == backend]
         if backend_summaries:
-            best = max(
-                backend_summaries, key=lambda s: s["throughput_gbps_median"]
-            )
+            best = max(backend_summaries, key=lambda s: s["throughput_gbps_median"])
             best_configs[backend] = (
                 best["buffer_size_mb"],
                 best["chunk_size_mb"],
@@ -416,7 +414,8 @@ def generate_charts(
             if xs:
                 marker = markers[idx % len(markers)]
                 ax.plot(
-                    xs, ys,
+                    xs,
+                    ys,
                     marker=marker,
                     label=f"{backend} (buf={buf_mb}MB, chunk={chunk_mb}MB)",
                     linewidth=2,
@@ -445,9 +444,7 @@ def generate_charts(
         bar_values = []
         bar_configs = []
         for backend in backends:
-            backend_summaries = [
-                s for s in summaries if s["backend"] == backend
-            ]
+            backend_summaries = [s for s in summaries if s["backend"] == backend]
             if backend_summaries:
                 best = max(
                     backend_summaries,
@@ -499,6 +496,7 @@ def generate_charts(
 # 5. headers_batch aggregation, reporting, and CSV export
 # ---------------------------------------------------------------------------
 
+
 def aggregate_headers_batch_results(
     raw_results: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -513,8 +511,8 @@ def aggregate_headers_batch_results(
     Returns:
         A list of summary dicts, one per unique parameter combination.
     """
-    from collections import defaultdict
     import statistics
+    from collections import defaultdict
 
     groups: Dict[Tuple, List[Dict[str, Any]]] = defaultdict(list)
     for r in raw_results:
@@ -632,8 +630,7 @@ def print_headers_batch_report(summaries: List[Dict[str, Any]]) -> None:
         print("[headers_batch] Cross-Backend Comparison (best params per backend)")
         print(f"{'=' * 90}")
         header = (
-            f"{'Backend':<10} {'Best Config':<35} "
-            f"{'files/s':<20} {'Speedup':<10}"
+            f"{'Backend':<10} {'Best Config':<35} " f"{'files/s':<20} {'Speedup':<10}"
         )
         print(header)
         print(f"{'-' * 90}")
@@ -720,9 +717,7 @@ def export_headers_batch_csv(
         "num_iterations",
     ]
     with open(summary_path, "w", newline="") as f:
-        writer = _csv.DictWriter(
-            f, fieldnames=summary_fields, extrasaction="ignore"
-        )
+        writer = _csv.DictWriter(f, fieldnames=summary_fields, extrasaction="ignore")
         writer.writeheader()
         for s in summaries:
             writer.writerow(s)

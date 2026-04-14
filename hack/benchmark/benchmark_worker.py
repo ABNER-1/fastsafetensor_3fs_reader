@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """Benchmark worker process for multi-backend performance testing.
 
@@ -7,11 +6,11 @@ subprocess. It supports mock/python/cpp backends via
 ``fastsafetensor_3fs_reader.create_reader``.
 """
 
+import multiprocessing as mp
 import os
 import sys
 import time
-import multiprocessing as mp
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 # ---------------------------------------------------------------------------
 # sys.path setup
@@ -70,6 +69,7 @@ def benchmark_worker_process(
     """
     try:
         import torch
+
         from fastsafetensor_3fs_reader import create_reader
 
         # ---- create reader ------------------------------------------------
@@ -232,9 +232,7 @@ def _create_reader_for_backend(
         )
 
 
-def assign_files_to_processes(
-    files: List[str], num_processes: int
-) -> List[List[str]]:
+def assign_files_to_processes(files: List[str], num_processes: int) -> List[List[str]]:
     """Distribute *files* across *num_processes* workers using a stride pattern.
 
     Example::
@@ -322,6 +320,7 @@ def run_benchmark_round(
 # headers_batch benchmark
 # ---------------------------------------------------------------------------
 
+
 def benchmark_headers_batch_worker_process(
     rank: int,
     file_paths: List[str],
@@ -390,7 +389,9 @@ def benchmark_headers_batch_worker_process(
                 iter_files += len(results)
 
                 if verbose:
-                    batch_fps = len(results) / batch_elapsed if batch_elapsed > 0 else 0.0
+                    batch_fps = (
+                        len(results) / batch_elapsed if batch_elapsed > 0 else 0.0
+                    )
                     print(
                         f"[Rank {rank} | {backend} | headers_batch] "
                         f"Iter {iteration + 1}/{num_iterations}, "

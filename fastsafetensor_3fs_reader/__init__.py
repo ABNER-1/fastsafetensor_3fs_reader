@@ -21,12 +21,8 @@ from ._lib_preload import get_hf3fs_lib_path, preload_hf3fs_library
 preload_hf3fs_library()  # must run before any backend import
 
 from ._mount_utils import extract_mount_point  # noqa: E402  # isort: skip
-from ._backend import (  # noqa: E402
-    create_reader,
-    get_backend,
-    init_backend,
-    is_available,
-)
+from ._backend import (create_reader, get_backend, init_backend,  # noqa: E402
+                       is_available)
 from .interface import FileReaderInterface  # noqa: E402
 from .mock import MockFileReader  # noqa: E402
 

@@ -21,7 +21,6 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 
-
 def find_cuda_home():
     """Find CUDA installation path."""
     cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
@@ -30,6 +29,7 @@ def find_cuda_home():
         if nvcc_path:
             cuda_home = os.path.dirname(os.path.dirname(nvcc_path))
     return cuda_home
+
 
 class OptionalBuildExt(build_ext):
     """Custom build_ext that treats the C++ extension as optional."""
@@ -76,7 +76,6 @@ def build_core_v2_extension():
     if hf3fs_lib_dir:
         library_dirs.append(hf3fs_lib_dir)
         extra_link_args.append(f"-Wl,-rpath,{hf3fs_lib_dir}")
-
 
     # CUDA configuration (for cuda_runtime.h + libcudart)
     cuda_home = find_cuda_home()
