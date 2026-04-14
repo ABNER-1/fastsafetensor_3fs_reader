@@ -14,9 +14,12 @@ from multiprocessing.shared_memory import SharedMemory
 
 logger = logging.getLogger(__name__)
 
-from ._cuda_utils import (_copy_host_to_target,  # noqa: E402
-                          _cuda_host_register, _cuda_host_unregister,
-                          _fast_cuda_memcpy)
+from ._cuda_utils import (  # noqa: E402
+    _copy_host_to_target,
+    _cuda_host_register,
+    _cuda_host_unregister,
+    _fast_cuda_memcpy,
+)
 from .interface import FileReaderInterface  # noqa: E402
 
 try:
@@ -28,8 +31,7 @@ except ImportError:
     _TORCH_AVAILABLE = False
 
 try:
-    from hf3fs_fuse.io import (deregister_fd, make_ioring, make_iovec,
-                               register_fd)
+    from hf3fs_fuse.io import deregister_fd, make_ioring, make_iovec, register_fd
 
     _HF3FS_FUSE_AVAILABLE = True
 except ImportError:
