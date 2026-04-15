@@ -225,16 +225,16 @@ if is_available():
 
 ## Performance
 
-> **Test environment:** Single 400 Gbps RDMA NIC, DeepSeek-V3 (~640 GB safetensors).
+> **Test environment:** Single 400 Gbps RDMA NIC, DeepSeek-R1 (~640 GB safetensors).
 
 | Configuration | Avg Throughput (GB/s) | Peak with fastsafetensors (GB/s) | Load Time (s) | Backend |
 |---|---|---|---|---|
 | 8 processes, buffer=8 MB | 35.0 | 32.0 | 30.34 | C++ (non-pipelined) |
 | 8 processes, buffer=16 MB | 37.6 | 36.6 | 25.73 | C++ (pipelined) |
 
-![RDMA throughput across buffer sizes](docs/images/cpp_performance.png)
+RDMA throughput across buffer sizes ![RDMA throughput across buffer sizes](docs/images/cpp_performance.png)
 
-![Model weight loading with fastsafetensors (pipelined, peak 36.6 GB/s)](docs/images/cpp_load.png)
+Model weight loading with fastsafetensors (pipelined, peak 36.6 GB/s ![Model weight loading with fastsafetensors (pipelined, peak 36.6 GB/s)](docs/images/cpp_load.png)
 
 For the full benchmarking suite (sweep backends, buffer sizes, chunk sizes, process counts), see [`hack/benchmark/`](hack/benchmark/).
 
