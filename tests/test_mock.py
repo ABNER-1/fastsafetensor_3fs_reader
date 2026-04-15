@@ -90,9 +90,7 @@ class TestReadHeadersBatch:
         mock_reader.read_headers_batch([tmp_safetensors])
         fd_count_before = len(mock_reader._fd_map)
 
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         assert len(mock_reader._fd_map) == fd_count_before
 
     def test_nonexistent_file_raises(self, mock_reader):
@@ -134,9 +132,7 @@ class TestReadHeadersBatch:
         paths = []
         for i in range(50):
             filepath = str(tmp_path / f"shard-{i:03d}.safetensors")
-            header = {
-                f"weight_{i}": {"dtype": "F32", "shape": [4], "data_offsets": [0, 16]}
-            }
+            header = {f"weight_{i}": {"dtype": "F32", "shape": [4], "data_offsets": [0, 16]}}
             header_json_bytes = json.dumps(header).encode("utf-8")
             header_len_bytes = struct.pack("<Q", len(header_json_bytes))
             with open(filepath, "wb") as f:
@@ -187,21 +183,15 @@ class TestReadChunked:
         assert header_len > 0
 
     def test_fd_reuse_same_path(self, tmp_safetensors, mock_reader):
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=8, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=8, total_length=8)
         assert len(mock_reader._fd_map) == 1
 
     def test_fd_reuse_after_headers_batch(self, tmp_safetensors, mock_reader):
         mock_reader.read_headers_batch([tmp_safetensors])
         assert len(mock_reader._fd_map) == 1
 
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         assert len(mock_reader._fd_map) == 1
 
     def test_nonexistent_file_raises(self, mock_reader):
@@ -328,17 +318,13 @@ class TestDataIntegrity:
 
 class TestClose:
     def test_close_clears_fd_map(self, tmp_safetensors, mock_reader):
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         assert len(mock_reader._fd_map) == 1
         mock_reader.close()
         assert len(mock_reader._fd_map) == 0
 
     def test_reopen_after_close(self, tmp_safetensors, mock_reader):
-        mock_reader.read_chunked(
-            path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-        )
+        mock_reader.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
         mock_reader.close()
 
         bytes_read = mock_reader.read_chunked(
@@ -356,9 +342,7 @@ class TestClose:
         r1 = MockFileReader()
         r2 = MockFileReader()
         try:
-            r1.read_chunked(
-                path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8
-            )
+            r1.read_chunked(path=tmp_safetensors, dev_ptr=0, file_offset=0, total_length=8)
             assert len(r1._fd_map) == 1
             assert len(r2._fd_map) == 0
         finally:
@@ -387,6 +371,4 @@ class TestErrorHandling:
 
     def test_read_headers_batch_mixed_paths_raises(self, tmp_safetensors, mock_reader):
         with pytest.raises(Exception):  # noqa: B017
-            mock_reader.read_headers_batch(
-                [tmp_safetensors, "/nonexistent/model.safetensors"]
-            )
+            mock_reader.read_headers_batch([tmp_safetensors, "/nonexistent/model.safetensors"])

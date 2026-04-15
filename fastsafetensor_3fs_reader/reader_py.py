@@ -96,9 +96,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
                 self._iov = make_iovec(self._shm, mount_point)
                 # shm can be unlinked after make_iovec (iov holds the reference)
                 self._shm.unlink()
-                self._ior = make_ioring(
-                    mount_point, entries, for_read=True, io_depth=io_depth
-                )
+                self._ior = make_ioring(mount_point, entries, for_read=True, io_depth=io_depth)
 
                 self._iov_buf_ptr = ctypes.addressof(
                     (ctypes.c_char * buffer_size).from_buffer(self._shm.buf)
@@ -259,9 +257,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
                     staging_ptr = ctypes.addressof(
                         (ctypes.c_char * actual).from_buffer(staging_buf)
                     )
-                    _copy_host_to_target(
-                        staging_buf, staging_ptr, dev_ptr + cur_dev_off, actual
-                    )
+                    _copy_host_to_target(staging_buf, staging_ptr, dev_ptr + cur_dev_off, actual)
                 if do_time:
                     _t_copy_elapsed = _time.monotonic() - t2
                     t_copy += _t_copy_elapsed
@@ -405,9 +401,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
         logger.debug("[PERF_DEBUG] _get_or_open_fd path=%r cache_hit=False", path)
         fd = os.open(path, os.O_RDONLY)
         is_usrbio = (
-            self._ior is not None
-            and register_fd is not None
-            and path.startswith(self._mount_point)
+            self._ior is not None and register_fd is not None and path.startswith(self._mount_point)
         )
         if is_usrbio:
             register_fd(fd)
@@ -443,9 +437,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
             _t_pread1 = _time.monotonic()
             header_len_bytes = os.pread(fd, 8, 0)
             if len(header_len_bytes) < 8:
-                raise ValueError(
-                    f"File too small to contain a SafeTensors header: {path}"
-                )
+                raise ValueError(f"File too small to contain a SafeTensors header: {path}")
             header_size = struct.unpack("<Q", header_len_bytes)[0]
             logger.debug(
                 "[PERF_DEBUG] _read_single_header path=%r pread_len_bytes=%.2fms",
@@ -521,9 +513,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
             raise OSError(-actual, os.strerror(-actual))
         return actual
 
-    def _usrbio_read_chunk_timed(
-        self, fd: int, offset: int, length: int, do_time: bool
-    ) -> int:
+    def _usrbio_read_chunk_timed(self, fd: int, offset: int, length: int, do_time: bool) -> int:
         """Like ``_usrbio_read_chunk`` but records I/O time when *do_time* is True."""
         import time as _time
 
@@ -567,9 +557,7 @@ class ThreeFSFileReaderPy(FileReaderInterface):
 
         while remaining > 0 and num_requests < self._entries:
             this_chunk = min(remaining, self._page_size)
-            self._ior.prepare(
-                self._iov[iov_off : iov_off + this_chunk], True, fd, f_off
-            )
+            self._ior.prepare(self._iov[iov_off : iov_off + this_chunk], True, fd, f_off)
             iov_off += this_chunk
             f_off += this_chunk
             remaining -= this_chunk
@@ -613,7 +601,5 @@ class ThreeFSFileReaderPy(FileReaderInterface):
             _fast_cuda_memcpy(target_ptr, src_ptr, nbytes, kind=4)
         else:
             local_buf = bytearray(self._shm.buf[iov_offset : iov_offset + nbytes])
-            local_ptr = ctypes.addressof(
-                (ctypes.c_char * nbytes).from_buffer(local_buf)
-            )
+            local_ptr = ctypes.addressof((ctypes.c_char * nbytes).from_buffer(local_buf))
             _copy_host_to_target(local_buf, local_ptr, target_ptr, nbytes)
